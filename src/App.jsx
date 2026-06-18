@@ -713,7 +713,7 @@ export default function App() {
 
   const shift1Label = activeTab === "utensils" ? "Lunch Duty" : "Morning Garbage";
 
-  const shift1Details = activeTab === "utensils" ? "Sink & Utensils Setup" : "Wet Waste & Compost";
+  const shift1Details = activeTab === "utensils" ? "Utensils & Kitchen Clean" : "Wet Waste & Compost";
 
 
 
@@ -721,7 +721,7 @@ export default function App() {
 
   const shift2Label = activeTab === "utensils" ? "Dinner Duty" : "Night Garbage";
 
-  const shift2Details = activeTab === "utensils" ? "Clean & Sanitize" : "Dry Waste & Recycling";
+  const shift2Details = activeTab === "utensils" ? "Utensils & Kitchen Clean" : "Dry Waste & Recycling";
 
 
 
@@ -1091,7 +1091,7 @@ export default function App() {
 
                             <span className="text-xs uppercase tracking-wider text-slate-400 block font-black">{shift2Label}</span>
 
-                            <span className="text-[11px] text-pink-300 font-bold">{shift2Details}</span>
+                            <span className="text-[11px] text-indigo-300 font-bold">{shift2Details}</span>
 
                           </div>
 
