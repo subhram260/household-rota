@@ -1,16 +1,28 @@
-# React + Vite
+# Household Rota
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+This is a Vite + React household rota app with a JSON-backed API route for roster data.
 
-Currently, two official plugins are available:
+## Vercel deployment
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
+Deploy the repo to Vercel as a standard Vite app. The `api/rota.js` function reads and updates `data/rota.json` through the GitHub Contents API.
 
-## React Compiler
+Set these environment variables in Vercel if you want roster edits to persist:
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+- `GITHUB_TOKEN`
+- `GITHUB_OWNER`
+- `GITHUB_REPO`
+- `GITHUB_PATH` optional, defaults to `data/rota.json`
 
-## Expanding the ESLint configuration
+If those variables are missing, the app still runs and uses local fallback data, but changes will not be written back to GitHub.
 
-If you are developing a production application, we recommend using TypeScript with type-aware lint rules enabled. Check out the [TS template](https://github.com/vitejs/vite/tree/main/packages/create-vite/template-react-ts) for information on how to integrate TypeScript and [`typescript-eslint`](https://typescript-eslint.io) in your project.
+## Local development
+
+```bash
+npm install
+npm run dev
+```
+
+## Notes
+
+- Garbage rota uses one assignee per day.
+- Sundays are excluded from the rota.

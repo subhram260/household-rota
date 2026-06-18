@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 
 
 
@@ -9,6 +9,12 @@ const DAYS = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", 
 const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 
 const SECRET = "kitchen123";
+
+const DEFAULT_UTENSILS_MEMBERS = ["Alice", "Bob", "Charlie", "David", "Emma"];
+
+const DEFAULT_GARBAGE_MEMBERS = ["Rahul", "Priya", "Amit", "Sneha", "Vikram"];
+
+const ROTA_API_URL = "/api/rota";
 
 
 
@@ -66,7 +72,7 @@ function nonSundayIndexFromBase(targetDate) {
 
 // Rotation engine skipping Sundays
 
-function getAssigneesForDate(members, targetDate) {
+function getAssigneesForDate(members, targetDate, shiftsPerDay = 2) {
 
   if (!members.length) return [null, null];
 
@@ -84,6 +90,10 @@ function getAssigneesForDate(members, targetDate) {
 
   const rotationIndex = nonSundayIndexFromBase(targetDate);
 
+  if (shiftsPerDay === 1) {
+    return [members[rotationIndex % members.length], null];
+  }
+
   return [
 
     members[(rotationIndex * 2) % members.length],
@@ -92,6 +102,13 @@ function getAssigneesForDate(members, targetDate) {
 
   ];
 
+}
+
+function normalizeMembersList(value, fallback) {
+  if (!Array.isArray(value)) return fallback;
+
+  const cleaned = value.filter((member) => typeof member === "string" && member.trim().length > 0);
+  return cleaned.length ? cleaned : fallback;
 }
 
 
@@ -256,9 +273,9 @@ export default function App() {
 
   // Rota Lists States
 
-  const [utensilsMembers, setUtensilsMembers] = useState(["Alice", "Bob", "Charlie", "David", "Emma"]);
+  const [utensilsMembers, setUtensilsMembers] = useState(DEFAULT_UTENSILS_MEMBERS);
 
-  const [GarbageMembers, setGarbageMembers] = useState(["Rahul", "Priya", "Amit", "Sneha", "Vikram"]);
+  const [GarbageMembers, setGarbageMembers] = useState(DEFAULT_GARBAGE_MEMBERS);
 
 
 
@@ -290,11 +307,85 @@ export default function App() {
 
   const [daysCount, setDaysCount] = useState(7); // Show next 7 or 14 non-Sunday days
 
+  const [rotaLoaded, setRotaLoaded] = useState(false);
+
 
 
   // Get active rota list based on current selection
 
   const currentMembersList = activeTab === "utensils" ? utensilsMembers : GarbageMembers;
+
+  const activeShiftCount = activeTab === "utensils" ? 2 : 1;
+
+  useEffect(() => {
+    let cancelled = false;
+
+    const loadRota = async () => {
+      try {
+        const response = await fetch(ROTA_API_URL);
+
+        if (!response.ok) {
+          throw new Error(`Failed to load rota JSON (${response.status})`);
+        }
+
+        const data = await response.json();
+
+        if (cancelled) return;
+
+        setUtensilsMembers(normalizeMembersList(data?.members?.utensils, DEFAULT_UTENSILS_MEMBERS));
+        setGarbageMembers(normalizeMembersList(data?.members?.garbage, DEFAULT_GARBAGE_MEMBERS));
+      } catch {
+        if (!cancelled) {
+          setErrorNotification("Using local roster data until the JSON backend is configured.");
+        }
+      } finally {
+        if (!cancelled) {
+          setRotaLoaded(true);
+        }
+      }
+    };
+
+    loadRota();
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!rotaLoaded) return;
+
+    const timeoutId = window.setTimeout(() => {
+      fetch(ROTA_API_URL, {
+        method: "PATCH",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          members: {
+            utensils: utensilsMembers,
+            garbage: GarbageMembers,
+          },
+        }),
+      }).catch((error) => {
+      })
+        .then(async (response) => {
+          if (!response.ok) {
+            throw new Error(`Save failed (${response.status})`);
+          }
+
+          const result = await response.json();
+          if (result?.fallback) {
+            setErrorNotification("JSON backend is not configured yet, so changes are only stored locally.");
+          }
+        })
+        .catch((error) => {
+          console.warn("Roster JSON backend is not available yet.", error);
+        });
+    }, 300);
+
+    return () => window.clearTimeout(timeoutId);
+  }, [GarbageMembers, rotaLoaded, utensilsMembers]);
 
 
 
@@ -504,7 +595,7 @@ export default function App() {
 
 
 
-    const [lunch, dinner] = getAssigneesForDate(currentMembersList, targetDate);
+    const [lunch, dinner] = getAssigneesForDate(currentMembersList, targetDate, activeShiftCount);
 
     
 
@@ -550,7 +641,7 @@ export default function App() {
 
     nextDays.forEach(d => {
 
-      const [lunch, dinner] = getAssigneesForDate(currentMembersList, d);
+      const [lunch, dinner] = getAssigneesForDate(currentMembersList, d, activeShiftCount);
 
       const dayStr = `${DAYS[d.getDay()]} ${d.getDate()} ${MONTHS[d.getMonth()]}`;
 
@@ -612,7 +703,7 @@ export default function App() {
 
   const isTodaySunday = todayDateObj.getDay() === 0;
 
-  const [todayShift1, todayShift2] = getAssigneesForDate(currentMembersList, todayDateObj);
+  const [todayShift1, todayShift2] = getAssigneesForDate(currentMembersList, todayDateObj, activeShiftCount);
 
 
 
@@ -1096,7 +1187,7 @@ export default function App() {
 
                 {getUpcomingNonSundays(daysCount).map((d, index) => {
 
-                  const [lunch, dinner] = getAssigneesForDate(currentMembersList, d);
+                  const [lunch, dinner] = getAssigneesForDate(currentMembersList, d, activeShiftCount);
 
                   const isSaturday = d.getDay() === 6;
 
