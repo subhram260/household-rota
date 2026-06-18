@@ -1,6 +1,18 @@
 {
   "members": {
-    "utensils": ["Alice", "Bob", "Charlie", "David", "Emma"],
-    "garbage": ["Rahul", "Priya", "Amit", "Sneha", "Vikram"]
+    "utensils": [
+      "Alice",
+      "Bob",
+      "Charlie",
+      "David",
+      "Emma"
+    ],
+    "garbage": [
+      "Rahul",
+      "Priya",
+      "Amit",
+      "Sneha",
+      "Vikram"
+    ]
   }
 }
