@@ -336,7 +336,7 @@ export default function App() {
         setGarbageMembers(normalizeMembersList(data?.members?.garbage, DEFAULT_GARBAGE_MEMBERS));
       } catch {
         if (!cancelled) {
-          setErrorNotification("Using local roster data until the JSON backend is configured.");
+          console.warn("JSON backend is unavailable; using local roster data.");
         }
       } finally {
         if (!cancelled) {
@@ -376,7 +376,7 @@ export default function App() {
 
           const result = await response.json();
           if (result?.fallback) {
-            setErrorNotification("JSON backend is not configured yet, so changes are only stored locally.");
+            console.warn("JSON backend is not configured yet; changes are only stored locally.");
           }
         })
         .catch((error) => {
