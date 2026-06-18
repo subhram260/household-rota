@@ -1,8 +1,6 @@
 {
   "members": {
     "utensils": [
-      "Alice",
-      "Charlie",
       "David",
       "Emma"
     ],
