@@ -16,6 +16,8 @@ const DEFAULT_GARBAGE_MEMBERS = ["Rahul", "Priya", "Amit", "Sneha", "Vikram"];
 
 const ROTA_API_URL = "/api/rota";
 
+const ROTA_STORAGE_KEY = "household-rota:members";
+
 
 
 // DST-safe offset date generation
@@ -109,6 +111,21 @@ function normalizeMembersList(value, fallback) {
 
   const cleaned = value.filter((member) => typeof member === "string" && member.trim().length > 0);
   return cleaned.length ? cleaned : fallback;
+}
+
+function readStoredRota() {
+  try {
+    const stored = localStorage.getItem(ROTA_STORAGE_KEY);
+    if (!stored) return null;
+
+    const parsed = JSON.parse(stored);
+    return {
+      utensils: normalizeMembersList(parsed?.utensils, DEFAULT_UTENSILS_MEMBERS),
+      garbage: normalizeMembersList(parsed?.garbage, DEFAULT_GARBAGE_MEMBERS),
+    };
+  } catch {
+    return null;
+  }
 }
 
 
@@ -273,9 +290,9 @@ export default function App() {
 
   // Rota Lists States
 
-  const [utensilsMembers, setUtensilsMembers] = useState(DEFAULT_UTENSILS_MEMBERS);
+  const [utensilsMembers, setUtensilsMembers] = useState(() => readStoredRota()?.utensils || DEFAULT_UTENSILS_MEMBERS);
 
-  const [GarbageMembers, setGarbageMembers] = useState(DEFAULT_GARBAGE_MEMBERS);
+  const [GarbageMembers, setGarbageMembers] = useState(() => readStoredRota()?.garbage || DEFAULT_GARBAGE_MEMBERS);
 
 
 
@@ -332,8 +349,17 @@ export default function App() {
 
         if (cancelled) return;
 
-        setUtensilsMembers(normalizeMembersList(data?.members?.utensils, DEFAULT_UTENSILS_MEMBERS));
-        setGarbageMembers(normalizeMembersList(data?.members?.garbage, DEFAULT_GARBAGE_MEMBERS));
+        if (!data?.fallback) {
+          setUtensilsMembers(normalizeMembersList(data?.members?.utensils, DEFAULT_UTENSILS_MEMBERS));
+          setGarbageMembers(normalizeMembersList(data?.members?.garbage, DEFAULT_GARBAGE_MEMBERS));
+          localStorage.setItem(
+            ROTA_STORAGE_KEY,
+            JSON.stringify({
+              utensils: normalizeMembersList(data?.members?.utensils, DEFAULT_UTENSILS_MEMBERS),
+              garbage: normalizeMembersList(data?.members?.garbage, DEFAULT_GARBAGE_MEMBERS),
+            }),
+          );
+        }
       } catch {
         if (!cancelled) {
           console.warn("JSON backend is unavailable; using local roster data.");
@@ -377,9 +403,23 @@ export default function App() {
           const result = await response.json();
           if (result?.fallback) {
             console.warn("JSON backend is not configured yet; changes are only stored locally.");
+            localStorage.setItem(
+              ROTA_STORAGE_KEY,
+              JSON.stringify({
+                utensils: utensilsMembers,
+                garbage: GarbageMembers,
+              }),
+            );
           }
         })
         .catch((error) => {
+          localStorage.setItem(
+            ROTA_STORAGE_KEY,
+            JSON.stringify({
+              utensils: utensilsMembers,
+              garbage: GarbageMembers,
+            }),
+          );
           console.warn("Roster JSON backend is not available yet.", error);
         });
     }, 300);

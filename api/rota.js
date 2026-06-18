@@ -83,8 +83,8 @@ async function writeGitHubJson(data) {
 export default async function handler(req, res) {
   try {
     if (req.method === "GET") {
-      const { data } = await readGitHubJson();
-      return res.status(200).json(data);
+      const { data, fallback } = await readGitHubJson();
+      return res.status(200).json({ ...data, fallback });
     }
 
     if (req.method === "PATCH" || req.method === "PUT") {
