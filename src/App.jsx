@@ -18,8 +18,6 @@ const MEMBER_PASSCODES = {
 };
 
 const ROTA_API_URL = "/api/rota";
-const ROTA_STORAGE_KEY = "household-rota:members";
-const GARBAGE_CYCLE_STORAGE_KEY = "household-rota:garbage-cycle-state";
 const DEVICE_USER_STORAGE_KEY = "household-rota:device-verified-member";
 
 // 12 working-day cycle matrix starting Wednesday, Sep 30, 2026
@@ -93,31 +91,6 @@ function normalizeMembersList(value, fallback) {
   if (!Array.isArray(value)) return fallback;
   const cleaned = value.filter((member) => typeof member === "string" && member.trim().length > 0);
   return cleaned.length >= 2 ? cleaned : fallback;
-}
-
-function readStoredRota() {
-  try {
-    const stored = localStorage.getItem(ROTA_STORAGE_KEY);
-    if (!stored) return null;
-
-    const parsed = JSON.parse(stored);
-    return {
-      utensils: normalizeMembersList(parsed?.utensils, DEFAULT_MEMBERS),
-      garbage: normalizeMembersList(parsed?.garbage, DEFAULT_MEMBERS),
-    };
-  } catch {
-    return null;
-  }
-}
-
-function readStoredGarbageCycleState() {
-  try {
-    const stored = localStorage.getItem(GARBAGE_CYCLE_STORAGE_KEY);
-    if (!stored) return null;
-    return JSON.parse(stored);
-  } catch {
-    return null;
-  }
 }
 
 function avatarColor(name = "") {
@@ -196,37 +169,29 @@ function TrashIcon({ className = "w-4.5 h-4.5" }) {
 }
 
 export default function App() {
-  const [activeTab, setActiveTab] = useState("utensils"); // 'utensils' or 'Garbage'
+  const [activeTab, setActiveTab] = useState("utensils");
 
-  const [utensilsMembers, setUtensilsMembers] = useState(() => readStoredRota()?.utensils || DEFAULT_MEMBERS);
-  const [GarbageMembers, setGarbageMembers] = useState(() => readStoredRota()?.garbage || DEFAULT_MEMBERS);
+  const [utensilsMembers, setUtensilsMembers] = useState(DEFAULT_MEMBERS);
+  const [GarbageMembers, setGarbageMembers] = useState(DEFAULT_MEMBERS);
 
-  // Phone identity verified via one-time code
+  // Phone identity verified via one-time code (stays on device)
   const [verifiedMember, setVerifiedMember] = useState(() => {
     return localStorage.getItem(DEVICE_USER_STORAGE_KEY) || null;
   });
 
-  // State for the one-time phone verification modal
   const [verifyPinInput, setVerifyPinInput] = useState("");
   const [verifyPinError, setVerifyPinError] = useState("");
 
-  // Dynamic Garbage Cycle state:
-  // approvals map: { [forMember]: { status: 'approved' | 'declined', approvedBy: string, isProxy: boolean } }
-  const [garbageCycle, setGarbageCycle] = useState(() => {
-    const saved = readStoredGarbageCycleState();
-    return (
-      saved || {
-        currentIndex: 0,
-        approvals: {},
-        history: [], // [{ id, cleaner, dateStr, timestamp, proxies: [{ forMember, approvedBy }] }]
-      }
-    );
+  // Shared Garbage Cycle state (synced with data/rota.json)
+  const [garbageCycle, setGarbageCycle] = useState({
+    currentIndex: 0,
+    approvals: {},
+    history: [],
   });
 
-  // Double confirmation modal for approving on behalf of an absent flatmate
   const [proxyTargetMember, setProxyTargetMember] = useState(null);
 
-  // History Clear Modal / Prompt state
+  // History Clear Modal
   const [showClearHistoryModal, setShowClearHistoryModal] = useState(false);
   const [clearHistoryPassword, setClearHistoryPassword] = useState("");
   const [clearHistoryError, setClearHistoryError] = useState(false);
@@ -243,7 +208,6 @@ export default function App() {
 
   const [copied, setCopied] = useState(false);
   const [daysCount, setDaysCount] = useState(12);
-  const [rotaLoaded, setRotaLoaded] = useState(false);
 
   const currentMembersList =
     (activeTab === "utensils" ? utensilsMembers : GarbageMembers)?.length > 0
@@ -255,7 +219,6 @@ export default function App() {
   const todayDateObj = getDate(0);
   const isTodaySunday = todayDateObj.getDay() === 0;
 
-  // Active Garbage Assignee calculations
   const safeGarbageMembers = GarbageMembers.length ? GarbageMembers : DEFAULT_MEMBERS;
   const currentGarbageAssignee = safeGarbageMembers[garbageCycle.currentIndex % safeGarbageMembers.length];
   const requiredApprovers = safeGarbageMembers.filter((m) => m !== currentGarbageAssignee);
@@ -268,7 +231,47 @@ export default function App() {
 
   const approvedCount = requiredApprovers.filter((m) => getApprovalStatus(m)?.status === "approved").length;
 
-  // Handle Initial Phone Verification with Code
+  // Sync state with data/rota.json via /api/rota
+  const syncWithServer = async () => {
+    try {
+      const response = await fetch(ROTA_API_URL);
+      if (!response.ok) return;
+      const data = await response.json();
+
+      if (data?.members?.utensils) {
+        setUtensilsMembers(normalizeMembersList(data.members.utensils, DEFAULT_MEMBERS));
+      }
+      if (data?.members?.garbage) {
+        setGarbageMembers(normalizeMembersList(data.members.garbage, DEFAULT_MEMBERS));
+      }
+      if (data?.garbageCycle) {
+        setGarbageCycle(data.garbageCycle);
+      }
+    } catch (err) {
+      console.warn("Could not sync with /api/rota", err);
+    }
+  };
+
+  // Initial load and periodic 4-second poll for cross-phone synchronization
+  useEffect(() => {
+    syncWithServer();
+    const interval = setInterval(syncWithServer, 4000);
+    return () => clearInterval(interval);
+  }, []);
+
+  // Save changes back to data/rota.json via /api/rota
+  const patchServerData = async (payload) => {
+    try {
+      await fetch(ROTA_API_URL, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+    } catch (err) {
+      console.error("Failed to patch /api/rota", err);
+    }
+  };
+
   const handleVerifyPhone = (e) => {
     e.preventDefault();
     const pin = verifyPinInput.trim();
@@ -293,79 +296,11 @@ export default function App() {
     setVerifiedMember(null);
   };
 
-  useEffect(() => {
-    let cancelled = false;
-
-    const loadRota = async () => {
-      try {
-        const response = await fetch(ROTA_API_URL);
-        if (!response.ok) throw new Error(`Failed to load rota (${response.status})`);
-        const data = await response.json();
-
-        if (cancelled) return;
-
-        if (!data?.fallback) {
-          setUtensilsMembers(normalizeMembersList(data?.members?.utensils, DEFAULT_MEMBERS));
-          setGarbageMembers(normalizeMembersList(data?.members?.garbage, DEFAULT_MEMBERS));
-          localStorage.setItem(
-            ROTA_STORAGE_KEY,
-            JSON.stringify({
-              utensils: normalizeMembersList(data?.members?.utensils, DEFAULT_MEMBERS),
-              garbage: normalizeMembersList(data?.members?.garbage, DEFAULT_MEMBERS),
-            })
-          );
-        }
-      } catch {
-        if (!cancelled) console.warn("JSON backend unavailable; using local data.");
-      } finally {
-        if (!cancelled) setRotaLoaded(true);
-      }
-    };
-
-    loadRota();
-    return () => {
-      cancelled = true;
-    };
-  }, []);
-
-  useEffect(() => {
-    if (!rotaLoaded) return;
-
-    const timeoutId = window.setTimeout(() => {
-      fetch(ROTA_API_URL, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          members: { utensils: utensilsMembers, garbage: GarbageMembers },
-        }),
-      })
-        .then(async (response) => {
-          if (!response.ok) throw new Error(`Save failed (${response.status})`);
-          const result = await response.json();
-          if (result?.fallback) {
-            localStorage.setItem(
-              ROTA_STORAGE_KEY,
-              JSON.stringify({ utensils: utensilsMembers, garbage: GarbageMembers })
-            );
-          }
-        })
-        .catch(() => {
-          localStorage.setItem(
-            ROTA_STORAGE_KEY,
-            JSON.stringify({ utensils: utensilsMembers, garbage: GarbageMembers })
-          );
-        });
-    }, 300);
-
-    return () => window.clearTimeout(timeoutId);
-  }, [GarbageMembers, rotaLoaded, utensilsMembers]);
-
-  const saveGarbageCycle = (newState) => {
-    setGarbageCycle(newState);
-    localStorage.setItem(GARBAGE_CYCLE_STORAGE_KEY, JSON.stringify(newState));
+  const updateGarbageCycle = (newCycleState) => {
+    setGarbageCycle(newCycleState);
+    patchServerData({ garbageCycle: newCycleState });
   };
 
-  // Submit decision for a given member (either self or proxy)
   const submitDecisionForMember = (targetMember, decision, isProxy = false) => {
     if (!verifiedMember) return;
 
@@ -380,18 +315,15 @@ export default function App() {
       [targetMember]: newApprovalRecord,
     };
 
-    // Calculate total approved across all required approvers
     const totalApproved = requiredApprovers.filter((m) => {
       const rec = m === targetMember ? newApprovalRecord : getApprovalStatus(m);
       return rec?.status === "approved";
     }).length;
 
     if (totalApproved === requiredApprovers.length) {
-      // 100% consensus reached -> handover to next person & add to 1-month history
       const nextIdx = (garbageCycle.currentIndex + 1) % safeGarbageMembers.length;
       const now = new Date();
 
-      // Collect any proxy records for this cleaning cycle
       const proxyRecords = [];
       requiredApprovers.forEach((m) => {
         const rec = m === targetMember ? newApprovalRecord : getApprovalStatus(m);
@@ -416,19 +348,18 @@ export default function App() {
 
       const updatedCycle = {
         currentIndex: nextIdx,
-        approvals: {}, // Reset for next person
+        approvals: {},
         history: filteredHistory,
       };
-      saveGarbageCycle(updatedCycle);
+      updateGarbageCycle(updatedCycle);
     } else {
-      saveGarbageCycle({
+      updateGarbageCycle({
         ...garbageCycle,
         approvals: newApprovals,
       });
     }
   };
 
-  // Password-protected Clear History Handler
   const handleClearHistorySubmit = (e) => {
     e.preventDefault();
     if (clearHistoryPassword === ADMIN_SECRET) {
@@ -436,7 +367,7 @@ export default function App() {
         ...garbageCycle,
         history: [],
       };
-      saveGarbageCycle(updatedCycle);
+      updateGarbageCycle(updatedCycle);
       setShowClearHistoryModal(false);
       setClearHistoryPassword("");
       setClearHistoryError(false);
@@ -448,7 +379,7 @@ export default function App() {
 
   const manualAdvanceGarbage = () => {
     const nextIdx = (garbageCycle.currentIndex + 1) % safeGarbageMembers.length;
-    saveGarbageCycle({
+    updateGarbageCycle({
       ...garbageCycle,
       currentIndex: nextIdx,
       approvals: {},
@@ -469,6 +400,15 @@ export default function App() {
     return list;
   };
 
+  const saveMembersList = (newUtensils, newGarbage) => {
+    patchServerData({
+      members: {
+        utensils: newUtensils,
+        garbage: newGarbage,
+      },
+    });
+  };
+
   const add = () => {
     const name = input.trim();
     if (!name) return;
@@ -480,9 +420,13 @@ export default function App() {
     }
 
     if (activeTab === "utensils") {
-      setUtensilsMembers((p) => [...p, name]);
+      const updated = [...utensilsMembers, name];
+      setUtensilsMembers(updated);
+      saveMembersList(updated, GarbageMembers);
     } else {
-      setGarbageMembers((p) => [...p, name]);
+      const updated = [...GarbageMembers, name];
+      setGarbageMembers(updated);
+      saveMembersList(utensilsMembers, updated);
     }
     setInput("");
   };
@@ -493,9 +437,13 @@ export default function App() {
       return;
     }
     if (activeTab === "utensils") {
-      setUtensilsMembers((p) => p.filter((m) => m !== name));
+      const updated = utensilsMembers.filter((m) => m !== name);
+      setUtensilsMembers(updated);
+      saveMembersList(updated, GarbageMembers);
     } else {
-      setGarbageMembers((p) => p.filter((m) => m !== name));
+      const updated = GarbageMembers.filter((m) => m !== name);
+      setGarbageMembers(updated);
+      saveMembersList(utensilsMembers, updated);
     }
   };
 
@@ -508,8 +456,10 @@ export default function App() {
 
     if (activeTab === "utensils") {
       setUtensilsMembers(list);
+      saveMembersList(list, GarbageMembers);
     } else {
       setGarbageMembers(list);
+      saveMembersList(utensilsMembers, list);
     }
   };
 
@@ -522,8 +472,10 @@ export default function App() {
 
     if (activeTab === "utensils") {
       setUtensilsMembers(list);
+      saveMembersList(list, GarbageMembers);
     } else {
       setGarbageMembers(list);
+      saveMembersList(utensilsMembers, list);
     }
   };
 
@@ -793,7 +745,7 @@ export default function App() {
         {errorNotification && (
           <div className="bg-rose-50 border-2 border-rose-200 text-rose-800 rounded-2xl p-4 flex items-start justify-between shadow-sm">
             <div className="flex items-center gap-2">
-              <span className="text-xl">⚠️️</span>
+              <span className="text-xl">⚠️</span>
               <p className="font-bold text-sm">{errorNotification}</p>
             </div>
             <button
@@ -1142,7 +1094,6 @@ export default function App() {
                                 : "Pending ⏳"}
                             </span>
 
-                            {/* Allow other members to approve on behalf if this member is absent */}
                             {!isSelf && rec?.status !== "approved" && (
                               <button
                                 onClick={() => setProxyTargetMember(member)}
