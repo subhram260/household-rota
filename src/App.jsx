@@ -222,6 +222,11 @@ export default function App() {
     );
   });
 
+  // History Clear Modal / Prompt state
+  const [showClearHistoryModal, setShowClearHistoryModal] = useState(false);
+  const [clearHistoryPassword, setClearHistoryPassword] = useState("");
+  const [clearHistoryError, setClearHistoryError] = useState(false);
+
   const [input, setInput] = useState("");
   const [unlocked, setUnlocked] = useState(false);
   const [showPwInput, setShowPwInput] = useState(false);
@@ -258,7 +263,6 @@ export default function App() {
     const pin = verifyPinInput.trim();
     if (!pin) return;
 
-    // Find which member this PIN belongs to
     const foundMember = Object.keys(MEMBER_PASSCODES).find(
       (name) => MEMBER_PASSCODES[name] === pin
     );
@@ -364,7 +368,6 @@ export default function App() {
     ).length;
 
     if (totalApproved === requiredApprovers.length) {
-      // 100% consensus reached -> handover to next person & add to 1-month history
       const nextIdx = (garbageCycle.currentIndex + 1) % safeGarbageMembers.length;
       const now = new Date();
       const historyEntry = {
@@ -375,7 +378,6 @@ export default function App() {
         epoch: now.getTime(),
       };
 
-      // Keep up to 30 days (1 month) of history
       const thirtyDaysAgo = Date.now() - 30 * 24 * 60 * 60 * 1000;
       const filteredHistory = [historyEntry, ...(garbageCycle.history || [])].filter(
         (item) => !item.epoch || item.epoch >= thirtyDaysAgo
@@ -383,7 +385,7 @@ export default function App() {
 
       const updatedCycle = {
         currentIndex: nextIdx,
-        approvals: {}, // Reset for next person
+        approvals: {},
         history: filteredHistory,
       };
       saveGarbageCycle(updatedCycle);
@@ -392,6 +394,24 @@ export default function App() {
         ...garbageCycle,
         approvals: newApprovals,
       });
+    }
+  };
+
+  // Password-protected Clear History Handler
+  const handleClearHistorySubmit = (e) => {
+    e.preventDefault();
+    if (clearHistoryPassword === ADMIN_SECRET) {
+      const updatedCycle = {
+        ...garbageCycle,
+        history: [],
+      };
+      saveGarbageCycle(updatedCycle);
+      setShowClearHistoryModal(false);
+      setClearHistoryPassword("");
+      setClearHistoryError(false);
+    } else {
+      setClearHistoryError(true);
+      setClearHistoryPassword("");
     }
   };
 
@@ -607,12 +627,75 @@ export default function App() {
                 Verify Device
               </button>
             </form>
+          </div>
+        </div>
+      )}
 
-            <div className="bg-slate-50 border border-slate-200 rounded-xl p-3 text-[11px] text-slate-500 text-center space-y-0.5">
-              <div className="font-bold text-slate-700">Member Codes:</div>
-              <div>Aman: 1001 • Subhram: 1002</div>
-              <div>Chinmaya: 1003 • Pritam: 1004</div>
+      {/* PASSWORD-PROTECTED CLEAR HISTORY MODAL */}
+      {showClearHistoryModal && (
+        <div className="fixed inset-0 z-50 bg-slate-900/80 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-white rounded-3xl p-6 sm:p-7 max-w-sm w-full shadow-2xl space-y-4 border-2 border-slate-100">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <span className="text-2xl">🔒</span>
+                <h3 className="text-lg font-black text-slate-800">Clear History</h3>
+              </div>
+              <button
+                onClick={() => {
+                  setShowClearHistoryModal(false);
+                  setClearHistoryPassword("");
+                  setClearHistoryError(false);
+                }}
+                className="text-slate-400 hover:text-slate-600 font-bold px-2 py-1 rounded-lg"
+              >
+                ✕
+              </button>
             </div>
+
+            <p className="text-xs text-slate-500">
+              Enter password <strong className="text-slate-700">kitchen123</strong> to wipe the past 1-month garbage log.
+            </p>
+
+            <form onSubmit={handleClearHistorySubmit} className="space-y-3">
+              <div>
+                <input
+                  type="password"
+                  placeholder="Enter password..."
+                  value={clearHistoryPassword}
+                  onChange={(e) => {
+                    setClearHistoryPassword(e.target.value);
+                    setClearHistoryError(false);
+                  }}
+                  className="w-full text-center text-sm font-bold py-2.5 rounded-xl border-2 border-slate-200 focus:border-rose-600 focus:outline-hidden bg-slate-50"
+                  autoFocus
+                />
+                {clearHistoryError && (
+                  <p className="text-xs font-bold text-rose-600 text-center mt-1.5">
+                    Incorrect password.
+                  </p>
+                )}
+              </div>
+
+              <div className="flex gap-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowClearHistoryModal(false);
+                    setClearHistoryPassword("");
+                    setClearHistoryError(false);
+                  }}
+                  className="w-1/2 py-2.5 rounded-xl text-xs font-bold bg-slate-100 text-slate-600 hover:bg-slate-200"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  className="w-1/2 py-2.5 rounded-xl text-xs font-black bg-rose-600 hover:bg-rose-700 text-white shadow-sm"
+                >
+                  Wipe History
+                </button>
+              </div>
+            </form>
           </div>
         </div>
       )}
@@ -959,11 +1042,22 @@ export default function App() {
                   </div>
                 </section>
 
-                {/* 1-Month Garbage History Log */}
+                {/* 1-Month Garbage History Log with Password Protection */}
                 <section className="bg-white border-2 border-slate-200 rounded-3xl p-5 sm:p-6 shadow-xs space-y-3">
                   <div className="flex items-center justify-between border-b pb-2 border-slate-100">
-                    <h3 className="text-sm font-black text-slate-800">1-Month Cleaning History</h3>
-                    <span className="text-[10px] text-slate-400 font-bold">Past 30 Days</span>
+                    <div className="flex items-center gap-2">
+                      <h3 className="text-sm font-black text-slate-800">1-Month Cleaning History</h3>
+                      <span className="text-[10px] text-slate-400 font-bold">(30 Days)</span>
+                    </div>
+
+                    {garbageCycle.history && garbageCycle.history.length > 0 && (
+                      <button
+                        onClick={() => setShowClearHistoryModal(true)}
+                        className="inline-flex items-center gap-1 text-[11px] font-bold text-rose-600 hover:text-rose-700 bg-rose-50 hover:bg-rose-100 px-2.5 py-1 rounded-lg border border-rose-200 transition"
+                      >
+                        <span>🔒</span> Clear Log
+                      </button>
+                    )}
                   </div>
 
                   {garbageCycle.history && garbageCycle.history.length > 0 ? (
@@ -985,7 +1079,7 @@ export default function App() {
                     </div>
                   ) : (
                     <p className="text-xs text-slate-400 py-3 text-center">
-                      No cleans recorded in the last 30 days yet.
+                      No cleans recorded in the last 30 days.
                     </p>
                   )}
                 </section>
