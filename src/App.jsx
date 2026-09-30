@@ -10,7 +10,7 @@ const ADMIN_SECRET = "kitchen123";
 const DEFAULT_MEMBERS = ["Aman", "Subhram", "Chinmaya", "Pritam"];
 
 const ROTA_API_URL = "/api/rota";
-const VERIFY_API_URL = "/api/verify-code";
+const VERIFY_API_URL = "/api/rota"; // Sends POST requests directly to /api/rota
 const DEVICE_AUTH_STORAGE_KEY = "household-rota:device-auth";
 
 // 12 working-day cycle matrix starting Wednesday, Sep 30, 2026
