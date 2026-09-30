@@ -23,10 +23,10 @@
   "garbageCycle": {
     "currentIndex": 3,
     "approvals": {
-      "Pritam": {
+      "Aman": {
         "status": "approved",
         "approvedBy": "Pritam",
-        "isProxy": false
+        "isProxy": true
       }
     },
     "history": [
