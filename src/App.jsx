@@ -4,15 +4,23 @@ import React, { useEffect, useState } from "react";
 const DAYS = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
 const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 
-const SECRET = "kitchen123";
+const ADMIN_SECRET = "kitchen123";
 
-// Shared members across both rotas
+// Shared flatmates list
 const DEFAULT_MEMBERS = ["Aman", "Subhram", "Chinmaya", "Pritam"];
+
+// Member verification PIN codes (Phone onboarding)
+const MEMBER_PASSCODES = {
+  Aman: "1001",
+  Subhram: "1002",
+  Chinmaya: "1003",
+  Pritam: "1004",
+};
 
 const ROTA_API_URL = "/api/rota";
 const ROTA_STORAGE_KEY = "household-rota:members";
 const GARBAGE_CYCLE_STORAGE_KEY = "household-rota:garbage-cycle-state";
-const DEVICE_USER_STORAGE_KEY = "household-rota:device-current-user";
+const DEVICE_USER_STORAGE_KEY = "household-rota:device-verified-member";
 
 // 12 working-day cycle matrix starting Wednesday, Sep 30, 2026
 // Member indices: 0: Aman, 1: Subhram, 2: Chinmaya, 3: Pritam
@@ -63,7 +71,7 @@ function nonSundayIndexFromBase(targetDate) {
   return ((workingDays % 12) + 12) % 12;
 }
 
-// Rotation engine for Utensils (skipping Sundays)
+// Utensils rotation engine skipping Sundays
 function getUtensilsForDate(members, targetDate) {
   const safeMembers = Array.isArray(members) && members.length ? members : DEFAULT_MEMBERS;
   if (targetDate.getDay() === 0) return [null, null];
@@ -193,19 +201,23 @@ export default function App() {
   const [utensilsMembers, setUtensilsMembers] = useState(() => readStoredRota()?.utensils || DEFAULT_MEMBERS);
   const [GarbageMembers, setGarbageMembers] = useState(() => readStoredRota()?.garbage || DEFAULT_MEMBERS);
 
-  // Identify who is viewing this screen on their phone
-  const [currentPhoneUser, setCurrentPhoneUser] = useState(() => {
-    return localStorage.getItem(DEVICE_USER_STORAGE_KEY) || DEFAULT_MEMBERS[0];
+  // Phone identity verified via one-time code
+  const [verifiedMember, setVerifiedMember] = useState(() => {
+    return localStorage.getItem(DEVICE_USER_STORAGE_KEY) || null;
   });
 
-  // Dynamic Garbage Cycle state: who is current, approvals map, and history
+  // State for the one-time phone verification modal
+  const [verifyPinInput, setVerifyPinInput] = useState("");
+  const [verifyPinError, setVerifyPinError] = useState("");
+
+  // Dynamic Garbage Cycle state: who is current, approvals map, and 30-day history
   const [garbageCycle, setGarbageCycle] = useState(() => {
     const saved = readStoredGarbageCycleState();
     return (
       saved || {
         currentIndex: 0,
         approvals: {}, // { [approverName]: 'approved' | 'declined' }
-        history: [],
+        history: [], // [{ id, cleaner, dateStr, timestamp }]
       }
     );
   });
@@ -234,11 +246,37 @@ export default function App() {
   const todayDateObj = getDate(0);
   const isTodaySunday = todayDateObj.getDay() === 0;
 
-  // Active Garbage Assignee and voter lists
+  // Active Garbage Assignee calculations
   const safeGarbageMembers = GarbageMembers.length ? GarbageMembers : DEFAULT_MEMBERS;
   const currentGarbageAssignee = safeGarbageMembers[garbageCycle.currentIndex % safeGarbageMembers.length];
   const requiredApprovers = safeGarbageMembers.filter((m) => m !== currentGarbageAssignee);
   const approvedCount = requiredApprovers.filter((m) => garbageCycle.approvals[m] === "approved").length;
+
+  // Handle Initial Phone Verification with Code
+  const handleVerifyPhone = (e) => {
+    e.preventDefault();
+    const pin = verifyPinInput.trim();
+    if (!pin) return;
+
+    // Find which member this PIN belongs to
+    const foundMember = Object.keys(MEMBER_PASSCODES).find(
+      (name) => MEMBER_PASSCODES[name] === pin
+    );
+
+    if (foundMember) {
+      setVerifiedMember(foundMember);
+      localStorage.setItem(DEVICE_USER_STORAGE_KEY, foundMember);
+      setVerifyPinInput("");
+      setVerifyPinError("");
+    } else {
+      setVerifyPinError("Invalid code. Use Aman (1001), Subhram (1002), Chinmaya (1003), or Pritam (1004).");
+    }
+  };
+
+  const handleLogoutDevice = () => {
+    localStorage.removeItem(DEVICE_USER_STORAGE_KEY);
+    setVerifiedMember(null);
+  };
 
   useEffect(() => {
     let cancelled = false;
@@ -312,42 +350,41 @@ export default function App() {
     localStorage.setItem(GARBAGE_CYCLE_STORAGE_KEY, JSON.stringify(newState));
   };
 
-  const handleSetUser = (name) => {
-    setCurrentPhoneUser(name);
-    localStorage.setItem(DEVICE_USER_STORAGE_KEY, name);
-  };
-
-  // Submit approval or decline decision from phone
+  // Submit decision from phone
   const submitDecision = (decision) => {
-    if (!currentPhoneUser || currentPhoneUser === currentGarbageAssignee) return;
+    if (!verifiedMember || verifiedMember === currentGarbageAssignee) return;
 
     const newApprovals = {
       ...garbageCycle.approvals,
-      [currentPhoneUser]: decision,
+      [verifiedMember]: decision,
     };
 
-    // Check if everyone approved
     const totalApproved = requiredApprovers.filter((m) =>
-      m === currentPhoneUser ? decision === "approved" : newApprovals[m] === "approved"
+      m === verifiedMember ? decision === "approved" : newApprovals[m] === "approved"
     ).length;
 
     if (totalApproved === requiredApprovers.length) {
-      // Advance to next flatmate
+      // 100% consensus reached -> handover to next person & add to 1-month history
       const nextIdx = (garbageCycle.currentIndex + 1) % safeGarbageMembers.length;
+      const now = new Date();
       const historyEntry = {
+        id: Date.now(),
         cleaner: currentGarbageAssignee,
-        timestamp: new Date().toLocaleDateString(undefined, {
-          month: "short",
-          day: "numeric",
-          hour: "2-digit",
-          minute: "2-digit",
-        }),
+        dateStr: `${DAYS[now.getDay()]}, ${now.getDate()} ${MONTHS[now.getMonth()]} ${now.getFullYear()}`,
+        timestamp: now.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
+        epoch: now.getTime(),
       };
+
+      // Keep up to 30 days (1 month) of history
+      const thirtyDaysAgo = Date.now() - 30 * 24 * 60 * 60 * 1000;
+      const filteredHistory = [historyEntry, ...(garbageCycle.history || [])].filter(
+        (item) => !item.epoch || item.epoch >= thirtyDaysAgo
+      );
 
       const updatedCycle = {
         currentIndex: nextIdx,
         approvals: {}, // Reset for next person
-        history: [historyEntry, ...(garbageCycle.history || []).slice(0, 7)],
+        history: filteredHistory,
       };
       saveGarbageCycle(updatedCycle);
     } else {
@@ -452,7 +489,7 @@ export default function App() {
   };
 
   const handlePwSubmit = () => {
-    if (pwInput === SECRET) {
+    if (pwInput === ADMIN_SECRET) {
       setUnlocked(true);
       setShowPwInput(false);
       setPwInput("");
@@ -511,12 +548,10 @@ export default function App() {
       setTimeout(() => setCopied(false), 2000);
     } else {
       const lines = [
-        `🗑️️ Garbage Clearance Duty Status`,
-        `Current Assignee: ${currentGarbageAssignee}`,
+        `🗑 Garbage Clearance Status`,
+        `Current Cleaner: ${currentGarbageAssignee}`,
         `Approvals: ${approvedCount}/${requiredApprovers.length}`,
-        ...requiredApprovers.map(
-          (m) => `• ${m}: ${garbageCycle.approvals[m] || "Pending"}`
-        ),
+        ...requiredApprovers.map((m) => `• ${m}: ${garbageCycle.approvals[m] || "Pending"}`),
       ];
 
       navigator.clipboard.writeText(lines.join("\n"));
@@ -527,17 +562,67 @@ export default function App() {
 
   const [todayLunch, todayDinner] = getUtensilsForDate(currentMembersList, todayDateObj);
   const upcomingDays = getUpcomingNonSundays(daysCount);
-
-  const currentUserDecision = garbageCycle.approvals[currentPhoneUser];
+  const currentUserDecision = verifiedMember ? garbageCycle.approvals[verifiedMember] : null;
 
   return (
     <div className="min-h-screen bg-slate-50 text-slate-800 flex flex-col items-center p-3 sm:p-6 md:py-10">
+      {/* ONE-TIME PHONE VERIFICATION MODAL */}
+      {!verifiedMember && (
+        <div className="fixed inset-0 z-50 bg-slate-900/80 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-white rounded-3xl p-6 sm:p-8 max-w-sm w-full shadow-2xl space-y-5 border-2 border-slate-100">
+            <div className="text-center space-y-1">
+              <span className="text-4xl block">📱</span>
+              <h2 className="text-2xl font-black text-slate-800">Verify Your Phone</h2>
+              <p className="text-xs text-slate-500">
+                Enter your 4-digit household PIN once. Your mobile will stay verified permanently.
+              </p>
+            </div>
+
+            <form onSubmit={handleVerifyPhone} className="space-y-4">
+              <div>
+                <input
+                  type="password"
+                  inputMode="numeric"
+                  maxLength={4}
+                  placeholder="Enter 4-digit code..."
+                  value={verifyPinInput}
+                  onChange={(e) => {
+                    setVerifyPinInput(e.target.value);
+                    setVerifyPinError("");
+                  }}
+                  className="w-full text-center tracking-widest text-2xl font-black py-3 rounded-2xl border-2 border-slate-200 focus:border-indigo-600 focus:outline-hidden bg-slate-50"
+                  autoFocus
+                />
+                {verifyPinError && (
+                  <p className="text-xs font-bold text-rose-600 text-center mt-2 leading-tight">
+                    {verifyPinError}
+                  </p>
+                )}
+              </div>
+
+              <button
+                type="submit"
+                className="w-full py-3.5 bg-indigo-600 hover:bg-indigo-700 active:scale-98 transition text-white font-black rounded-2xl shadow-md"
+              >
+                Verify Device
+              </button>
+            </form>
+
+            <div className="bg-slate-50 border border-slate-200 rounded-xl p-3 text-[11px] text-slate-500 text-center space-y-0.5">
+              <div className="font-bold text-slate-700">Member Codes:</div>
+              <div>Aman: 1001 • Subhram: 1002</div>
+              <div>Chinmaya: 1003 • Pritam: 1004</div>
+            </div>
+          </div>
+        </div>
+      )}
+
       <div className="w-full max-w-5xl space-y-5">
         {/* Error Notification Banner */}
         {errorNotification && (
           <div className="bg-rose-50 border-2 border-rose-200 text-rose-800 rounded-2xl p-4 flex items-start justify-between shadow-sm">
             <div className="flex items-center gap-2">
-              <span className="text-xl">⚠️️</span>
+              <span className="text-xl">⚠️</span>
               <p className="font-bold text-sm">{errorNotification}</p>
             </div>
             <button
@@ -548,37 +633,6 @@ export default function App() {
             </button>
           </div>
         )}
-
-        {/* Device Identity Selector: Who is using this phone */}
-        <div className="bg-white border-2 border-slate-200/90 rounded-2xl p-3 sm:p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3 shadow-xs">
-          <div className="flex items-center gap-2">
-            <span className="text-xl">📱</span>
-            <div>
-              <span className="text-[10px] font-black uppercase tracking-wider text-slate-400 block">
-                Your Phone Profile
-              </span>
-              <span className="font-extrabold text-sm text-slate-800">
-                You are: <span className="text-indigo-600 font-black">{currentPhoneUser}</span>
-              </span>
-            </div>
-          </div>
-
-          <div className="flex items-center gap-1 overflow-x-auto pb-1 sm:pb-0">
-            {safeGarbageMembers.map((name) => (
-              <button
-                key={name}
-                onClick={() => handleSetUser(name)}
-                className={`px-3 py-1.5 rounded-xl text-xs font-black transition shrink-0 ${
-                  currentPhoneUser === name
-                    ? "bg-slate-900 text-white shadow-xs"
-                    : "bg-slate-100 text-slate-600 hover:bg-slate-200"
-                }`}
-              >
-                {name}
-              </button>
-            ))}
-          </div>
-        </div>
 
         {/* Task Menu Header */}
         <nav className="grid grid-cols-2 p-1.5 bg-slate-200/70 border-2 border-slate-300/40 rounded-2xl gap-2">
@@ -614,34 +668,44 @@ export default function App() {
           </button>
         </nav>
 
-        {/* Sub-Header & Share */}
+        {/* Sub-Header & Device Badge */}
         <header className="flex items-center justify-between gap-3 pb-2 border-b border-slate-200">
-          <div
-            className={`inline-flex items-center gap-1.5 px-3 py-1.5 border rounded-full text-xs font-extrabold tracking-wider uppercase ${
-              activeTab === "utensils"
-                ? "bg-indigo-50 border-indigo-200 text-indigo-700"
-                : "bg-amber-50 border-amber-200 text-amber-700"
-            }`}
-          >
-            <span>{activeTab === "utensils" ? "🍽️" : "🗑️"}</span>
-            <span>{activeTab === "utensils" ? "Utensils 2-Week Cycle" : "Garbage Approval"}</span>
+          <div className="flex items-center gap-2">
+            <span
+              className={`inline-flex items-center gap-1.5 px-3 py-1.5 border rounded-full text-xs font-extrabold tracking-wider uppercase ${
+                activeTab === "utensils"
+                  ? "bg-indigo-50 border-indigo-200 text-indigo-700"
+                  : "bg-amber-50 border-amber-200 text-amber-700"
+              }`}
+            >
+              <span>{activeTab === "utensils" ? "🍽️" : "🗑️"}</span>
+              <span>{activeTab === "utensils" ? "Utensils 2-Week Cycle" : "Garbage Approval"}</span>
+            </span>
+
+            {verifiedMember && (
+              <span className="hidden sm:inline-flex items-center gap-1 text-xs font-bold text-slate-500 bg-slate-100 px-2.5 py-1 rounded-full border border-slate-200">
+                Verified: <strong className="text-slate-800">{verifiedMember}</strong>
+                <button
+                  onClick={handleLogoutDevice}
+                  className="text-[10px] text-indigo-600 underline ml-1 hover:text-indigo-800"
+                >
+                  Change
+                </button>
+              </span>
+            )}
           </div>
 
           <button
             onClick={copyRotaText}
             className="inline-flex items-center gap-1.5 bg-white hover:bg-slate-50 active:scale-95 transition text-slate-800 font-bold px-3 py-1.5 rounded-xl border border-slate-200 shadow-xs text-xs"
           >
-            {copied ? (
-              <span className="text-emerald-600 font-black">✓ Copied</span>
-            ) : (
-              <span>Share Rota</span>
-            )}
+            {copied ? <span className="text-emerald-600 font-black">✓ Copied</span> : <span>Share Rota</span>}
           </button>
         </header>
 
         {/* Dashboard Grid Layout */}
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-5">
-          {/* LEFT: Active Views */}
+          {/* LEFT: Main Active Section */}
           <div className="lg:col-span-7 xl:col-span-8 space-y-5">
             {activeTab === "utensils" ? (
               <>
@@ -694,7 +758,7 @@ export default function App() {
                 {/* Upcoming Utensils Table */}
                 <section className="bg-white border-2 border-slate-200 rounded-3xl p-5 sm:p-6 shadow-xs">
                   <div className="flex items-center justify-between mb-3">
-                    <h3 className="text-base sm:text-lg font-black text-slate-800">Upcoming Non-Sunday Schedule</h3>
+                    <h3 className="text-base sm:text-lg font-black text-slate-800">Upcoming Schedule</h3>
                     <div className="flex gap-1.5">
                       <button
                         onClick={() => setDaysCount(6)}
@@ -710,7 +774,7 @@ export default function App() {
                           daysCount === 12 ? "bg-indigo-600 text-white border-indigo-600" : "bg-white text-slate-600 border-slate-200"
                         }`}
                       >
-                        12d (Full)
+                        12d
                       </button>
                     </div>
                   </div>
@@ -753,16 +817,16 @@ export default function App() {
                 </section>
               </>
             ) : (
-              /* Garbage Approvals View: Mobile-Friendly Buttons */
+              /* Garbage Approvals View */
               <div className="space-y-5">
                 {/* Active Assignee Banner */}
                 <section className="bg-gradient-to-br from-amber-500 to-amber-700 text-white rounded-3xl p-5 sm:p-7 shadow-md">
                   <div className="flex items-center justify-between gap-3 mb-4">
                     <div>
                       <span className="text-[10px] uppercase tracking-widest font-black text-amber-200">
-                        CLEAN WHEN FULL
+                        GARBAGE DUTY
                       </span>
-                      <h2 className="text-2xl font-black">Garbage Turn</h2>
+                      <h2 className="text-2xl font-black">Clean When Full</h2>
                     </div>
                     <span className="bg-amber-900/60 border border-amber-300/30 text-amber-100 px-3 py-1 rounded-xl text-xs font-black">
                       {approvedCount} of {requiredApprovers.length} Approvals
@@ -790,23 +854,30 @@ export default function App() {
                   </div>
                 </section>
 
-                {/* Mobile Action Card for Current Phone User */}
+                {/* Direct Action Card for Verified Phone User */}
                 <section className="bg-white border-2 border-slate-200 rounded-3xl p-5 sm:p-6 shadow-xs space-y-4">
-                  <div className="border-b pb-3 border-slate-100">
-                    <span className="text-[10px] font-black uppercase text-amber-600 tracking-wider">
-                      Your Phone Action
-                    </span>
-                    <h3 className="text-lg font-black text-slate-800">
-                      Did {currentGarbageAssignee} clean the garbage?
-                    </h3>
+                  <div className="border-b pb-3 border-slate-100 flex items-center justify-between">
+                    <div>
+                      <span className="text-[10px] font-black uppercase text-amber-600 tracking-wider">
+                        Action on your phone
+                      </span>
+                      <h3 className="text-lg font-black text-slate-800">
+                        Did {currentGarbageAssignee} clean the garbage?
+                      </h3>
+                    </div>
+                    {verifiedMember && (
+                      <span className="text-xs font-extrabold text-slate-400">
+                        You: <strong className="text-slate-700">{verifiedMember}</strong>
+                      </span>
+                    )}
                   </div>
 
-                  {currentPhoneUser === currentGarbageAssignee ? (
+                  {verifiedMember === currentGarbageAssignee ? (
                     <div className="bg-amber-50 border-2 border-amber-200 text-amber-900 rounded-2xl p-4 text-center space-y-1">
                       <span className="text-2xl block">🧹</span>
                       <h4 className="font-black text-base">It's your turn to clean the bin!</h4>
                       <p className="text-xs text-amber-700">
-                        Once you finish cleaning, your flatmates ({requiredApprovers.join(", ")}) will approve it on their phones.
+                        Once you dispose of the garbage, your flatmates ({requiredApprovers.join(", ")}) will approve it on their phones.
                       </p>
                     </div>
                   ) : (
@@ -838,15 +909,15 @@ export default function App() {
                       </div>
 
                       <p className="text-[11px] text-center text-slate-400">
-                        Your vote is saved instantly. When all 3 approve, duty rotates automatically.
+                        Your vote is saved. When all 3 roommates approve, the roster passes to the next person.
                       </p>
                     </div>
                   )}
                 </section>
 
-                {/* Flatmates Approval Status Overview */}
+                {/* Consensus Overview */}
                 <section className="bg-white border-2 border-slate-200 rounded-3xl p-5 sm:p-6 shadow-xs space-y-3">
-                  <h3 className="text-sm font-black text-slate-800">Flatmates Status</h3>
+                  <h3 className="text-sm font-black text-slate-800">Flatmates Approval Status</h3>
 
                   <div className="space-y-2.5">
                     {requiredApprovers.map((member) => {
@@ -886,6 +957,37 @@ export default function App() {
                       );
                     })}
                   </div>
+                </section>
+
+                {/* 1-Month Garbage History Log */}
+                <section className="bg-white border-2 border-slate-200 rounded-3xl p-5 sm:p-6 shadow-xs space-y-3">
+                  <div className="flex items-center justify-between border-b pb-2 border-slate-100">
+                    <h3 className="text-sm font-black text-slate-800">1-Month Cleaning History</h3>
+                    <span className="text-[10px] text-slate-400 font-bold">Past 30 Days</span>
+                  </div>
+
+                  {garbageCycle.history && garbageCycle.history.length > 0 ? (
+                    <div className="divide-y divide-slate-100 text-xs max-h-64 overflow-y-auto pr-1">
+                      {garbageCycle.history.map((item) => (
+                        <div key={item.id} className="py-2.5 flex items-center justify-between">
+                          <div className="flex items-center gap-2.5">
+                            <Avatar name={item.cleaner} size={28} />
+                            <div>
+                              <span className="font-black text-slate-800 block">{item.cleaner}</span>
+                              <span className="text-[10px] text-slate-400">{item.dateStr}</span>
+                            </div>
+                          </div>
+                          <span className="text-[11px] font-bold text-emerald-600 bg-emerald-50 px-2 py-0.5 rounded-lg border border-emerald-200">
+                            Approved ({item.timestamp})
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <p className="text-xs text-slate-400 py-3 text-center">
+                      No cleans recorded in the last 30 days yet.
+                    </p>
+                  )}
                 </section>
               </div>
             )}
@@ -930,7 +1032,7 @@ export default function App() {
               </section>
             ) : (
               <section className="bg-white border-2 border-slate-200 rounded-3xl p-5 shadow-xs space-y-3">
-                <h3 className="text-base font-black text-slate-800">Rotation Order</h3>
+                <h3 className="text-base font-black text-slate-800">Rotation Queue</h3>
                 <div className="space-y-1.5">
                   {safeGarbageMembers.map((member, i) => {
                     const isCurrent = i === garbageCycle.currentIndex % safeGarbageMembers.length;
@@ -938,7 +1040,9 @@ export default function App() {
                       <div
                         key={member}
                         className={`flex items-center justify-between p-2.5 rounded-xl border ${
-                          isCurrent ? "bg-amber-50 border-amber-300 font-black" : "bg-slate-50 border-slate-200 opacity-70"
+                          isCurrent
+                            ? "bg-amber-50 border-amber-300 font-black"
+                            : "bg-slate-50 border-slate-200 opacity-70"
                         }`}
                       >
                         <div className="flex items-center gap-2">
@@ -946,7 +1050,9 @@ export default function App() {
                           <span className="text-xs font-bold text-slate-800">{member}</span>
                         </div>
                         <span className="text-[10px] font-black uppercase text-slate-400">
-                          {isCurrent ? "Active Cleaner" : `Turn #${((i - garbageCycle.currentIndex + safeGarbageMembers.length) % safeGarbageMembers.length) + 1}`}
+                          {isCurrent
+                            ? "Current Turn"
+                            : `Next #${((i - garbageCycle.currentIndex + safeGarbageMembers.length) % safeGarbageMembers.length) + 1}`}
                         </span>
                       </div>
                     );
@@ -955,12 +1061,12 @@ export default function App() {
               </section>
             )}
 
-            {/* Member Order Edit */}
+            {/* Member Management Roster */}
             <section className="bg-white border-2 border-slate-200 rounded-3xl p-5 shadow-xs space-y-3">
               <div className="flex items-center justify-between">
                 <div>
-                  <h3 className="text-sm font-black text-slate-800">Members List</h3>
-                  <span className="text-[10px] text-slate-400">Controls rotation cycle</span>
+                  <h3 className="text-sm font-black text-slate-800">Household Members</h3>
+                  <span className="text-[10px] text-slate-400">Locked roster order</span>
                 </div>
                 <button
                   onClick={handleLockClick}
@@ -974,7 +1080,7 @@ export default function App() {
                 <div className="space-y-2">
                   <input
                     type="password"
-                    placeholder="Enter password..."
+                    placeholder="Enter admin password..."
                     value={pwInput}
                     onChange={(e) => setPwInput(e.target.value)}
                     onKeyDown={(e) => e.key === "Enter" && handlePwSubmit()}
@@ -1017,10 +1123,7 @@ export default function App() {
                         >
                           <ArrowDownIcon />
                         </button>
-                        <button
-                          onClick={() => remove(member)}
-                          className="p-1 text-rose-600"
-                        >
+                        <button onClick={() => remove(member)} className="p-1 text-rose-600">
                           <TrashIcon />
                         </button>
                       </div>
@@ -1035,13 +1138,10 @@ export default function App() {
                     type="text"
                     value={input}
                     onChange={(e) => setInput(e.target.value)}
-                    placeholder="New member..."
+                    placeholder="Add member..."
                     className="w-full text-xs border rounded-xl px-2.5 py-1.5 font-medium"
                   />
-                  <button
-                    onClick={add}
-                    className="bg-indigo-600 text-white px-3 py-1.5 rounded-xl text-xs font-bold"
-                  >
+                  <button onClick={add} className="bg-indigo-600 text-white px-3 py-1.5 rounded-xl text-xs font-bold">
                     Add
                   </button>
                 </div>
