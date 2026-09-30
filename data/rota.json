@@ -23,17 +23,6 @@
   "garbageCycle": {
     "currentIndex": 0,
     "approvals": {},
-    "history": [
-      {
-        "id": 1790773317632,
-        "type": "skip",
-        "skippedCleaner": "Chinmaya",
-        "skippedBy": "Pritam",
-        "passedTo": "Pritam",
-        "dateStr": "Wednesday, 30 Sep 2026",
-        "timestamp": "06:31 PM",
-        "epoch": 1790773317632
-      }
-    ]
+    "history": []
   }
 }
