@@ -13,23 +13,16 @@
       "Chinmaya"
     ]
   },
+  "passcodes": {
+    "Aman": "1001",
+    "Subhram": "1002",
+    "Chinmaya": "1003",
+    "Pritam": "1004"
+  },
+  "adminSecret": "kitchen123",
   "garbageCycle": {
     "currentIndex": 0,
     "approvals": {},
-    "history": [
-      {
-        "id": 1790767796177,
-        "cleaner": "Aman",
-        "dateStr": "Wednesday, 30 Sep 2026",
-        "timestamp": "16:59",
-        "proxies": [
-          {
-            "forMember": "Chinmaya",
-            "approvedBy": "Pritam"
-          }
-        ],
-        "epoch": 1790767796177
-      }
-    ]
+    "history": []
   }
 }
