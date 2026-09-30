@@ -15,7 +15,13 @@
   },
   "garbageCycle": {
     "currentIndex": 0,
-    "approvals": {},
+    "approvals": {
+      "Aman": {
+        "status": "approved",
+        "approvedBy": "Aman",
+        "isProxy": false
+      }
+    },
     "history": []
   }
 }
