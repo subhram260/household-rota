@@ -27,6 +27,11 @@
         "status": "approved",
         "approvedBy": "Aman",
         "isProxy": true
+      },
+      "Chinmaya": {
+        "status": "approved",
+        "approvedBy": "Aman",
+        "isProxy": true
       }
     },
     "history": []
