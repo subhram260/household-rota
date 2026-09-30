@@ -21,25 +21,27 @@
   },
   "adminSecret": "kitchen123",
   "garbageCycle": {
-    "currentIndex": 1,
-    "approvals": {
-      "Pritam": {
-        "status": "declined",
-        "approvedBy": "Pritam",
-        "isProxy": false
-      },
-      "Subhram": {
-        "status": "approved",
-        "approvedBy": "Pritam",
-        "isProxy": true
-      },
-      "Chinmaya": {
-        "status": "approved",
-        "approvedBy": "Pritam",
-        "isProxy": true
-      }
-    },
+    "currentIndex": 2,
+    "approvals": {},
     "history": [
+      {
+        "id": 1790769053382,
+        "type": "clean",
+        "cleaner": "Aman",
+        "dateStr": "Wednesday, 30 Sep 2026",
+        "timestamp": "05:20 PM",
+        "proxies": [
+          {
+            "forMember": "Subhram",
+            "approvedBy": "Pritam"
+          },
+          {
+            "forMember": "Chinmaya",
+            "approvedBy": "Pritam"
+          }
+        ],
+        "epoch": 1790769053382
+      },
       {
         "id": 1790769000684,
         "type": "skip",
