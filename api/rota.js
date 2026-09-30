@@ -32,7 +32,6 @@ function getConfig() {
   };
 }
 
-// Local filesystem helper when GITHUB_TOKEN is not configured
 function readLocalJson() {
   try {
     if (fs.existsSync(LOCAL_FILE_PATH)) {
@@ -62,7 +61,6 @@ function writeLocalJson(data) {
 async function readGitHubJson() {
   const { token, owner, repo, path: filePath } = getConfig();
 
-  // If GitHub credentials are missing, use local data/rota.json file
   if (!token || !owner || !repo) {
     const local = readLocalJson();
     return { data: local, sha: null, fallback: false };
@@ -96,7 +94,6 @@ async function readGitHubJson() {
 async function writeGitHubJson(data) {
   const { token, owner, repo, path: filePath } = getConfig();
 
-  // If GitHub credentials are missing, write directly to local data/rota.json
   if (!token || !owner || !repo) {
     const ok = writeLocalJson(data);
     return { ok, fallback: false };
@@ -130,6 +127,46 @@ async function writeGitHubJson(data) {
 
 export default async function handler(req, res) {
   try {
+    // -------------------------------------------------------------
+    // POST /api/rota: Handles PIN verification & session validation
+    // -------------------------------------------------------------
+    if (req.method === "POST") {
+      const { pin, member, token } = req.body || {};
+      const { data } = await readGitHubJson();
+      const passcodes = data?.passcodes || fallbackData.passcodes;
+
+      // Auto-validation of stored token
+      if (member && token) {
+        const expectedPin = passcodes[member];
+        if (expectedPin && token === Buffer.from(`${member}:${expectedPin}`).toString("base64")) {
+          return res.status(200).json({ valid: true, member });
+        }
+        return res.status(401).json({ valid: false, error: "Invalid session token" });
+      }
+
+      // Manual PIN verification
+      if (pin) {
+        const foundMember = Object.keys(passcodes).find(
+          (m) => String(passcodes[m]).trim() === String(pin).trim()
+        );
+
+        if (foundMember) {
+          const generatedToken = Buffer.from(`${foundMember}:${pin.trim()}`).toString("base64");
+          return res.status(200).json({
+            valid: true,
+            member: foundMember,
+            token: generatedToken,
+          });
+        }
+        return res.status(401).json({ valid: false, error: "Incorrect PIN" });
+      }
+
+      return res.status(400).json({ error: "Missing verification payload" });
+    }
+
+    // -------------------------------------------------------------
+    // GET /api/rota: Returns safe rota state without exposing PINs
+    // -------------------------------------------------------------
     if (req.method === "GET") {
       const { data, fallback } = await readGitHubJson();
 
@@ -146,7 +183,6 @@ export default async function handler(req, res) {
         },
       };
 
-      // Strip sensitive codes before returning to client devices
       delete safeState.passcodes;
       delete safeState.adminSecret;
 
@@ -156,13 +192,15 @@ export default async function handler(req, res) {
       });
     }
 
+    // -------------------------------------------------------------
+    // PATCH/PUT /api/rota: Updates roster/garbage state safely
+    // -------------------------------------------------------------
     if (req.method === "PATCH" || req.method === "PUT") {
       const incoming = typeof req.body === "string" ? JSON.parse(req.body) : req.body;
       if (!incoming || typeof incoming !== "object") {
         return res.status(400).json({ error: "Invalid JSON payload" });
       }
 
-      // Fetch latest state before writing to ensure partial updates merge cleanly
       const current = await readGitHubJson();
       const currentData = current.data || {};
 
@@ -178,7 +216,6 @@ export default async function handler(req, res) {
           ...(currentData.garbageCycle || fallbackData.garbageCycle),
           ...(incoming.garbageCycle || {}),
         },
-        // Preserve server-side secrets from being overwritten
         passcodes: currentData.passcodes || fallbackData.passcodes,
         adminSecret: currentData.adminSecret || fallbackData.adminSecret,
       };
@@ -187,7 +224,7 @@ export default async function handler(req, res) {
       return res.status(200).json({ ok: result.ok, fallback: Boolean(result.fallback) });
     }
 
-    res.setHeader("Allow", ["GET", "PATCH", "PUT"]);
+    res.setHeader("Allow", ["GET", "POST", "PATCH", "PUT"]);
     return res.status(405).json({ error: "Method not allowed" });
   } catch (error) {
     return res.status(500).json({ error: error.message || "Unexpected error" });
