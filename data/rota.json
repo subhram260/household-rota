@@ -20,6 +20,11 @@
         "status": "approved",
         "approvedBy": "Aman",
         "isProxy": false
+      },
+      "Subhram": {
+        "status": "approved",
+        "approvedBy": "Subhram",
+        "isProxy": false
       }
     },
     "history": []
