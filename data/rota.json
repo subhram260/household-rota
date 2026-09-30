@@ -27,6 +27,11 @@
         "status": "approved",
         "approvedBy": "Pritam",
         "isProxy": false
+      },
+      "Subhram": {
+        "status": "approved",
+        "approvedBy": "Pritam",
+        "isProxy": true
       }
     },
     "history": [
