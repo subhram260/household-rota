@@ -1,9 +1,20 @@
+import fs from "fs";
+import path from "path";
+
+// 4 flatmates & garbage turn-cycle fallback
 const fallbackData = {
   members: {
-    utensils: ["Alice", "Bob", "Charlie", "David", "Emma"],
-    garbage: ["Rahul", "Priya", "Amit", "Sneha", "Vikram"],
+    utensils: ["Aman", "Subhram", "Chinmaya", "Pritam"],
+    garbage: ["Aman", "Subhram", "Chinmaya", "Pritam"],
+  },
+  garbageCycle: {
+    currentIndex: 0,
+    approvals: {},
+    history: [],
   },
 };
+
+const LOCAL_FILE_PATH = path.join(process.cwd(), "data", "rota.json");
 
 function getConfig() {
   return {
@@ -14,14 +25,43 @@ function getConfig() {
   };
 }
 
-async function readGitHubJson() {
-  const { token, owner, repo, path } = getConfig();
+// Local filesystem helper when GITHUB_TOKEN is not configured
+function readLocalJson() {
+  try {
+    if (fs.existsSync(LOCAL_FILE_PATH)) {
+      const content = fs.readFileSync(LOCAL_FILE_PATH, "utf8");
+      return JSON.parse(content);
+    }
+  } catch (err) {
+    console.warn("Could not read local data/rota.json, using fallback:", err);
+  }
+  return fallbackData;
+}
 
+function writeLocalJson(data) {
+  try {
+    const dir = path.dirname(LOCAL_FILE_PATH);
+    if (!fs.existsSync(dir)) {
+      fs.mkdirSync(dir, { recursive: true });
+    }
+    fs.writeFileSync(LOCAL_FILE_PATH, JSON.stringify(data, null, 2) + "\n", "utf8");
+    return true;
+  } catch (err) {
+    console.error("Could not write to local data/rota.json:", err);
+    return false;
+  }
+}
+
+async function readGitHubJson() {
+  const { token, owner, repo, path: filePath } = getConfig();
+
+  // If GitHub credentials are missing, use local data/rota.json file
   if (!token || !owner || !repo) {
-    return { data: fallbackData, sha: null, fallback: true };
+    const local = readLocalJson();
+    return { data: local, sha: null, fallback: false };
   }
 
-  const response = await fetch(`https://api.github.com/repos/${owner}/${repo}/contents/${path}`, {
+  const response = await fetch(`https://api.github.com/repos/${owner}/${repo}/contents/${filePath}`, {
     headers: {
       Accept: "application/vnd.github+json",
       Authorization: `Bearer ${token}`,
@@ -33,7 +73,6 @@ async function readGitHubJson() {
     if (response.status === 404) {
       return { data: fallbackData, sha: null, fallback: true };
     }
-
     throw new Error(`GitHub read failed with status ${response.status}`);
   }
 
@@ -48,16 +87,18 @@ async function readGitHubJson() {
 }
 
 async function writeGitHubJson(data) {
-  const { token, owner, repo, path } = getConfig();
+  const { token, owner, repo, path: filePath } = getConfig();
 
+  // If GitHub credentials are missing, write directly to local data/rota.json
   if (!token || !owner || !repo) {
-    return { ok: false, fallback: true };
+    const ok = writeLocalJson(data);
+    return { ok, fallback: false };
   }
 
   const current = await readGitHubJson();
-  const message = "Update rota JSON from app";
+  const message = "Update rota & garbage cycle from app";
 
-  const response = await fetch(`https://api.github.com/repos/${owner}/${repo}/contents/${path}`, {
+  const response = await fetch(`https://api.github.com/repos/${owner}/${repo}/contents/${filePath}`, {
     method: "PUT",
     headers: {
       Accept: "application/vnd.github+json",
@@ -84,7 +125,19 @@ export default async function handler(req, res) {
   try {
     if (req.method === "GET") {
       const { data, fallback } = await readGitHubJson();
-      return res.status(200).json({ ...data, fallback });
+      return res.status(200).json({
+        ...fallbackData,
+        ...data,
+        members: {
+          ...fallbackData.members,
+          ...(data?.members || {}),
+        },
+        garbageCycle: {
+          ...fallbackData.garbageCycle,
+          ...(data?.garbageCycle || {}),
+        },
+        fallback,
+      });
     }
 
     if (req.method === "PATCH" || req.method === "PUT") {
@@ -93,8 +146,24 @@ export default async function handler(req, res) {
         return res.status(400).json({ error: "Invalid JSON payload" });
       }
 
-      const result = await writeGitHubJson(incoming);
-      return res.status(200).json({ ok: true, fallback: Boolean(result.fallback) });
+      // Fetch latest state before writing to ensure partial updates merge cleanly
+      const current = await readGitHubJson();
+      const merged = {
+        ...fallbackData,
+        ...current.data,
+        ...incoming,
+        members: {
+          ...(current.data?.members || fallbackData.members),
+          ...(incoming.members || {}),
+        },
+        garbageCycle: {
+          ...(current.data?.garbageCycle || fallbackData.garbageCycle),
+          ...(incoming.garbageCycle || {}),
+        },
+      };
+
+      const result = await writeGitHubJson(merged);
+      return res.status(200).json({ ok: result.ok, fallback: Boolean(result.fallback) });
     }
 
     res.setHeader("Allow", ["GET", "PATCH", "PUT"]);
