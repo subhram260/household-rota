@@ -15,7 +15,13 @@
   },
   "garbageCycle": {
     "currentIndex": 1,
-    "approvals": {},
+    "approvals": {
+      "Pritam": {
+        "status": "approved",
+        "approvedBy": "Pritam",
+        "isProxy": false
+      }
+    },
     "history": []
   }
 }
