@@ -47,9 +47,9 @@ function formatDateKey(dateObj) {
   ).padStart(2, "0")}`;
 }
 
-// Anchored to Monday, Oct 5, 2026 (Week 1, Day 0)
+/// Anchored to Wednesday, Sep 30, 2026 (Subhram & Aman -> Index 2)
 function nonSundayIndexFromBase(targetDate) {
-  const base = new Date(2026, 9, 5, 12, 0, 0); // Oct 5, 2026 is Monday
+  const base = new Date(2026, 8, 30, 12, 0, 0); // Month 8 is September (0-indexed)
   const target = new Date(targetDate);
   target.setHours(12, 0, 0, 0);
 
@@ -65,8 +65,10 @@ function nonSundayIndexFromBase(targetDate) {
     if (step < 0) cur.setDate(cur.getDate() - 1);
   }
 
-  return ((workingDays % 12) + 12) % 12;
+  // +2 offset sets Wednesday Sep 30, 2026 to [Subhram, Aman]
+  return (((workingDays + 2) % 12) + 12) % 12;
 }
+
 
 // Rotation engine for Utensils (skipping Sundays)
 function getUtensilsForDate(members, targetDate) {
