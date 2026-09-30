@@ -9,7 +9,7 @@ const ADMIN_SECRET = "kitchen123";
 // Shared flatmates list
 const DEFAULT_MEMBERS = ["Aman", "Subhram", "Chinmaya", "Pritam"];
 
-// Member verification PIN codes (Phone onboarding)
+// Member verification PIN codes (Kept private in code/server, not displayed on UI)
 const MEMBER_PASSCODES = {
   Aman: "1001",
   Subhram: "1002",
@@ -287,7 +287,7 @@ export default function App() {
       setVerifyPinInput("");
       setVerifyPinError("");
     } else {
-      setVerifyPinError("Invalid code. Use Aman (1001), Subhram (1002), Chinmaya (1003), or Pritam (1004).");
+      setVerifyPinError("Invalid PIN. Please check with your household admin.");
     }
   };
 
@@ -580,7 +580,7 @@ export default function App() {
 
   return (
     <div className="min-h-screen bg-slate-50 text-slate-800 flex flex-col items-center p-3 sm:p-6 md:py-10">
-      {/* ONE-TIME PHONE VERIFICATION MODAL */}
+      {/* ONE-TIME PHONE VERIFICATION MODAL (NO CODES DISPLAYED) */}
       {!verifiedMember && (
         <div className="fixed inset-0 z-50 bg-slate-900/80 backdrop-blur-sm flex items-center justify-center p-4">
           <div className="bg-white rounded-3xl p-6 sm:p-8 max-w-sm w-full shadow-2xl space-y-5 border-2 border-slate-100">
@@ -588,7 +588,7 @@ export default function App() {
               <span className="text-4xl block">📱</span>
               <h2 className="text-2xl font-black text-slate-800">Verify Your Phone</h2>
               <p className="text-xs text-slate-500">
-                Enter your 4-digit household PIN once. Your mobile will stay verified permanently.
+                Enter your private 4-digit household PIN. Your device will stay verified.
               </p>
             </div>
 
@@ -598,13 +598,13 @@ export default function App() {
                   type="password"
                   inputMode="numeric"
                   maxLength={4}
-                  placeholder="Enter 4-digit code..."
+                  placeholder="••••"
                   value={verifyPinInput}
                   onChange={(e) => {
                     setVerifyPinInput(e.target.value);
                     setVerifyPinError("");
                   }}
-                  className="w-full text-center tracking-widest text-2xl font-black py-3 rounded-2xl border-2 border-slate-200 focus:border-indigo-600 focus:outline-hidden bg-slate-50"
+                  className="w-full text-center tracking-widest text-3xl font-black py-3 rounded-2xl border-2 border-slate-200 focus:border-indigo-600 focus:outline-hidden bg-slate-50"
                   autoFocus
                 />
                 {verifyPinError && (
@@ -616,17 +616,11 @@ export default function App() {
 
               <button
                 type="submit"
-                className="w-full py-3.5 bg-indigo-600 hover:bg-indigo-700 active:scale-98 transition text-white font-black rounded-2xl shadow-md"
+                className="w-full py-3.5 bg-indigo-600 hover:bg-indigo-700 active:scale-98 transition text-white font-black rounded-2xl shadow-md text-sm"
               >
                 Verify Device
               </button>
             </form>
-
-            <div className="bg-slate-50 border border-slate-200 rounded-xl p-3 text-[11px] text-slate-500 text-center space-y-0.5">
-              <div className="font-bold text-slate-700">Member Codes:</div>
-              <div>Aman: 1001 • Subhram: 1002</div>
-              <div>Chinmaya: 1003 • Pritam: 1004</div>
-            </div>
           </div>
         </div>
       )}
@@ -693,7 +687,7 @@ export default function App() {
             </div>
 
             <p className="text-xs text-slate-500">
-              Enter password <strong className="text-slate-700">kitchen123</strong> to wipe the past 1-month garbage log.
+              Enter admin password to wipe the past 1-month garbage log.
             </p>
 
             <form onSubmit={handleClearHistorySubmit} className="space-y-3">
@@ -786,7 +780,7 @@ export default function App() {
                 : "text-slate-600 hover:bg-slate-300 hover:text-slate-900"
             }`}
           >
-            <span className="text-lg">🗑️</span>
+            <span className="text-lg">🗑️️</span>
             <span>Garbage</span>
           </button>
         </nav>
