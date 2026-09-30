@@ -210,17 +210,21 @@ export default function App() {
   const [verifyPinInput, setVerifyPinInput] = useState("");
   const [verifyPinError, setVerifyPinError] = useState("");
 
-  // Dynamic Garbage Cycle state: who is current, approvals map, and 30-day history
+  // Dynamic Garbage Cycle state:
+  // approvals map: { [forMember]: { status: 'approved' | 'declined', approvedBy: string, isProxy: boolean } }
   const [garbageCycle, setGarbageCycle] = useState(() => {
     const saved = readStoredGarbageCycleState();
     return (
       saved || {
         currentIndex: 0,
-        approvals: {}, // { [approverName]: 'approved' | 'declined' }
-        history: [], // [{ id, cleaner, dateStr, timestamp }]
+        approvals: {},
+        history: [], // [{ id, cleaner, dateStr, timestamp, proxies: [{ forMember, approvedBy }] }]
       }
     );
   });
+
+  // Double confirmation modal for approving on behalf of an absent flatmate
+  const [proxyTargetMember, setProxyTargetMember] = useState(null);
 
   // History Clear Modal / Prompt state
   const [showClearHistoryModal, setShowClearHistoryModal] = useState(false);
@@ -255,7 +259,14 @@ export default function App() {
   const safeGarbageMembers = GarbageMembers.length ? GarbageMembers : DEFAULT_MEMBERS;
   const currentGarbageAssignee = safeGarbageMembers[garbageCycle.currentIndex % safeGarbageMembers.length];
   const requiredApprovers = safeGarbageMembers.filter((m) => m !== currentGarbageAssignee);
-  const approvedCount = requiredApprovers.filter((m) => garbageCycle.approvals[m] === "approved").length;
+
+  const getApprovalStatus = (memberName) => {
+    const record = garbageCycle.approvals[memberName];
+    if (!record) return null;
+    return typeof record === "string" ? { status: record, approvedBy: memberName, isProxy: false } : record;
+  };
+
+  const approvedCount = requiredApprovers.filter((m) => getApprovalStatus(m)?.status === "approved").length;
 
   // Handle Initial Phone Verification with Code
   const handleVerifyPhone = (e) => {
@@ -354,27 +365,47 @@ export default function App() {
     localStorage.setItem(GARBAGE_CYCLE_STORAGE_KEY, JSON.stringify(newState));
   };
 
-  // Submit decision from phone
-  const submitDecision = (decision) => {
-    if (!verifiedMember || verifiedMember === currentGarbageAssignee) return;
+  // Submit decision for a given member (either self or proxy)
+  const submitDecisionForMember = (targetMember, decision, isProxy = false) => {
+    if (!verifiedMember) return;
+
+    const newApprovalRecord = {
+      status: decision,
+      approvedBy: verifiedMember,
+      isProxy: isProxy,
+    };
 
     const newApprovals = {
       ...garbageCycle.approvals,
-      [verifiedMember]: decision,
+      [targetMember]: newApprovalRecord,
     };
 
-    const totalApproved = requiredApprovers.filter((m) =>
-      m === verifiedMember ? decision === "approved" : newApprovals[m] === "approved"
-    ).length;
+    // Calculate total approved across all required approvers
+    const totalApproved = requiredApprovers.filter((m) => {
+      const rec = m === targetMember ? newApprovalRecord : getApprovalStatus(m);
+      return rec?.status === "approved";
+    }).length;
 
     if (totalApproved === requiredApprovers.length) {
+      // 100% consensus reached -> handover to next person & add to 1-month history
       const nextIdx = (garbageCycle.currentIndex + 1) % safeGarbageMembers.length;
       const now = new Date();
+
+      // Collect any proxy records for this cleaning cycle
+      const proxyRecords = [];
+      requiredApprovers.forEach((m) => {
+        const rec = m === targetMember ? newApprovalRecord : getApprovalStatus(m);
+        if (rec?.isProxy) {
+          proxyRecords.push({ forMember: m, approvedBy: rec.approvedBy });
+        }
+      });
+
       const historyEntry = {
         id: Date.now(),
         cleaner: currentGarbageAssignee,
         dateStr: `${DAYS[now.getDay()]}, ${now.getDate()} ${MONTHS[now.getMonth()]} ${now.getFullYear()}`,
         timestamp: now.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
+        proxies: proxyRecords,
         epoch: now.getTime(),
       };
 
@@ -385,7 +416,7 @@ export default function App() {
 
       const updatedCycle = {
         currentIndex: nextIdx,
-        approvals: {},
+        approvals: {}, // Reset for next person
         history: filteredHistory,
       };
       saveGarbageCycle(updatedCycle);
@@ -571,7 +602,18 @@ export default function App() {
         `🗑 Garbage Clearance Status`,
         `Current Cleaner: ${currentGarbageAssignee}`,
         `Approvals: ${approvedCount}/${requiredApprovers.length}`,
-        ...requiredApprovers.map((m) => `• ${m}: ${garbageCycle.approvals[m] || "Pending"}`),
+        ...requiredApprovers.map((m) => {
+          const rec = getApprovalStatus(m);
+          return `• ${m}: ${
+            rec?.status === "approved"
+              ? rec.isProxy
+                ? `Approved by ${rec.approvedBy}`
+                : "Approved"
+              : rec?.status === "declined"
+              ? "Declined"
+              : "Pending"
+          }`;
+        }),
       ];
 
       navigator.clipboard.writeText(lines.join("\n"));
@@ -582,7 +624,7 @@ export default function App() {
 
   const [todayLunch, todayDinner] = getUtensilsForDate(currentMembersList, todayDateObj);
   const upcomingDays = getUpcomingNonSundays(daysCount);
-  const currentUserDecision = verifiedMember ? garbageCycle.approvals[verifiedMember] : null;
+  const currentUserDecision = verifiedMember ? getApprovalStatus(verifiedMember) : null;
 
   return (
     <div className="min-h-screen bg-slate-50 text-slate-800 flex flex-col items-center p-3 sm:p-6 md:py-10">
@@ -627,6 +669,52 @@ export default function App() {
                 Verify Device
               </button>
             </form>
+
+            <div className="bg-slate-50 border border-slate-200 rounded-xl p-3 text-[11px] text-slate-500 text-center space-y-0.5">
+              <div className="font-bold text-slate-700">Member Codes:</div>
+              <div>Aman: 1001 • Subhram: 1002</div>
+              <div>Chinmaya: 1003 • Pritam: 1004</div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* DOUBLE CONFIRMATION MODAL FOR PROXY APPROVAL */}
+      {proxyTargetMember && (
+        <div className="fixed inset-0 z-50 bg-slate-900/80 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-white rounded-3xl p-6 sm:p-7 max-w-sm w-full shadow-2xl space-y-4 border-2 border-amber-200">
+            <div className="text-center space-y-2">
+              <span className="text-4xl block">🤝</span>
+              <h3 className="text-lg font-black text-slate-800">
+                Confirm Proxy Approval
+              </h3>
+              <p className="text-xs text-slate-600 leading-relaxed">
+                Are you sure you want to approve for <strong className="text-indigo-600">{proxyTargetMember}</strong> because they are absent?
+              </p>
+              <div className="bg-amber-50 border border-amber-200 rounded-xl p-2.5 text-[11px] text-amber-800 font-semibold">
+                ⚠️ Your name (<strong className="font-black text-slate-900">{verifiedMember}</strong>) will be stamped in history as the proxy approver.
+              </div>
+            </div>
+
+            <div className="flex gap-2 pt-2">
+              <button
+                type="button"
+                onClick={() => setProxyTargetMember(null)}
+                className="w-1/2 py-2.5 rounded-xl text-xs font-bold bg-slate-100 text-slate-700 hover:bg-slate-200 transition"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  submitDecisionForMember(proxyTargetMember, "approved", true);
+                  setProxyTargetMember(null);
+                }}
+                className="w-1/2 py-2.5 rounded-xl text-xs font-black bg-indigo-600 hover:bg-indigo-700 text-white shadow-sm transition"
+              >
+                Yes, Approve
+              </button>
+            </div>
           </div>
         </div>
       )}
@@ -705,7 +793,7 @@ export default function App() {
         {errorNotification && (
           <div className="bg-rose-50 border-2 border-rose-200 text-rose-800 rounded-2xl p-4 flex items-start justify-between shadow-sm">
             <div className="flex items-center gap-2">
-              <span className="text-xl">⚠️</span>
+              <span className="text-xl">⚠️️</span>
               <p className="font-bold text-sm">{errorNotification}</p>
             </div>
             <button
@@ -967,9 +1055,9 @@ export default function App() {
                     <div className="space-y-3">
                       <div className="grid grid-cols-2 gap-3">
                         <button
-                          onClick={() => submitDecision("approved")}
+                          onClick={() => submitDecisionForMember(verifiedMember, "approved", false)}
                           className={`py-3.5 px-4 rounded-2xl font-black text-sm flex items-center justify-center gap-2 border-2 transition active:scale-95 ${
-                            currentUserDecision === "approved"
+                            currentUserDecision?.status === "approved"
                               ? "bg-emerald-600 text-white border-emerald-700 shadow-md ring-2 ring-emerald-500/50"
                               : "bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border-emerald-300"
                           }`}
@@ -979,9 +1067,9 @@ export default function App() {
                         </button>
 
                         <button
-                          onClick={() => submitDecision("declined")}
+                          onClick={() => submitDecisionForMember(verifiedMember, "declined", false)}
                           className={`py-3.5 px-4 rounded-2xl font-black text-sm flex items-center justify-center gap-2 border-2 transition active:scale-95 ${
-                            currentUserDecision === "declined"
+                            currentUserDecision?.status === "declined"
                               ? "bg-rose-600 text-white border-rose-700 shadow-md ring-2 ring-rose-500/50"
                               : "bg-rose-50 hover:bg-rose-100 text-rose-800 border-rose-300"
                           }`}
@@ -998,51 +1086,80 @@ export default function App() {
                   )}
                 </section>
 
-                {/* Consensus Overview */}
+                {/* Consensus Overview + Proxy Option */}
                 <section className="bg-white border-2 border-slate-200 rounded-3xl p-5 sm:p-6 shadow-xs space-y-3">
-                  <h3 className="text-sm font-black text-slate-800">Flatmates Approval Status</h3>
+                  <div className="flex items-center justify-between border-b pb-2 border-slate-100">
+                    <h3 className="text-sm font-black text-slate-800">Flatmates Approval Status</h3>
+                    <span className="text-[10px] text-slate-400">Tap below to approve for absent housemates</span>
+                  </div>
 
                   <div className="space-y-2.5">
                     {requiredApprovers.map((member) => {
-                      const status = garbageCycle.approvals[member];
+                      const rec = getApprovalStatus(member);
+                      const isSelf = member === verifiedMember;
+
                       return (
                         <div
                           key={member}
-                          className={`flex items-center justify-between p-3 rounded-2xl border transition ${
-                            status === "approved"
+                          className={`flex flex-col sm:flex-row sm:items-center justify-between p-3 rounded-2xl border transition gap-2 ${
+                            rec?.status === "approved"
                               ? "bg-emerald-50/70 border-emerald-300"
-                              : status === "declined"
+                              : rec?.status === "declined"
                               ? "bg-rose-50/70 border-rose-300"
                               : "bg-slate-50 border-slate-200"
                           }`}
                         >
                           <div className="flex items-center gap-2.5">
                             <Avatar name={member} size={32} />
-                            <span className="font-extrabold text-sm text-slate-800">{member}</span>
+                            <div>
+                              <span className="font-extrabold text-sm text-slate-800 block">
+                                {member} {isSelf && <span className="text-[10px] text-indigo-600 font-bold">(You)</span>}
+                              </span>
+                              {rec?.isProxy && (
+                                <span className="text-[10px] text-indigo-700 font-semibold block">
+                                  Approved on behalf by {rec.approvedBy}
+                                </span>
+                              )}
+                            </div>
                           </div>
 
-                          <span
-                            className={`text-xs font-black px-2.5 py-1 rounded-xl ${
-                              status === "approved"
-                                ? "bg-emerald-600 text-white"
-                                : status === "declined"
-                                ? "bg-rose-600 text-white"
-                                : "bg-slate-200 text-slate-600"
-                            }`}
-                          >
-                            {status === "approved"
-                              ? "Approved ✓"
-                              : status === "declined"
-                              ? "Declined ✕"
-                              : "Pending ⏳"}
-                          </span>
+                          <div className="flex items-center gap-2 self-end sm:self-center">
+                            <span
+                              className={`text-xs font-black px-2.5 py-1 rounded-xl ${
+                                rec?.status === "approved"
+                                  ? "bg-emerald-600 text-white"
+                                  : rec?.status === "declined"
+                                  ? "bg-rose-600 text-white"
+                                  : "bg-slate-200 text-slate-600"
+                              }`}
+                            >
+                              {rec?.status === "approved"
+                                ? rec.isProxy
+                                  ? `Approved ✓ (${rec.approvedBy})`
+                                  : "Approved ✓"
+                                : rec?.status === "declined"
+                                ? "Declined ✕"
+                                : "Pending ⏳"}
+                            </span>
+
+                            {/* Allow other members to approve on behalf if this member is absent */}
+                            {!isSelf && rec?.status !== "approved" && (
+                              <button
+                                onClick={() => setProxyTargetMember(member)}
+                                className="text-[11px] font-bold text-indigo-700 hover:text-indigo-900 bg-indigo-50 hover:bg-indigo-100 border border-indigo-200 px-2 py-1 rounded-lg transition"
+                                title={`Approve for ${member} if they are absent`}
+                              >
+                                Approve for {member}
+                              </button>
+                            )}
+                          </div>
                         </div>
                       );
                     })}
                   </div>
                 </section>
 
-                {/* 1-Month Garbage History Log with Password Protection */}
+                {/* 1-Month Garbage History Log with Proxy Attribution */}
                 <section className="bg-white border-2 border-slate-200 rounded-3xl p-5 sm:p-6 shadow-xs space-y-3">
                   <div className="flex items-center justify-between border-b pb-2 border-slate-100">
                     <div className="flex items-center gap-2">
@@ -1067,8 +1184,17 @@ export default function App() {
                           <div className="flex items-center gap-2.5">
                             <Avatar name={item.cleaner} size={28} />
                             <div>
-                              <span className="font-black text-slate-800 block">{item.cleaner}</span>
+                              <span className="font-black text-slate-800 block">Cleaned by {item.cleaner}</span>
                               <span className="text-[10px] text-slate-400">{item.dateStr}</span>
+                              {item.proxies && item.proxies.length > 0 && (
+                                <div className="text-[10px] text-indigo-600 font-semibold mt-0.5">
+                                  {item.proxies.map((p, idx) => (
+                                    <span key={idx} className="block">
+                                      Proxy for {p.forMember}: approved by {p.approvedBy}
+                                    </span>
+                                  ))}
+                                </div>
+                              )}
                             </div>
                           </div>
                           <span className="text-[11px] font-bold text-emerald-600 bg-emerald-50 px-2 py-0.5 rounded-lg border border-emerald-200">
