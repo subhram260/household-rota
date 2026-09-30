@@ -6,12 +6,13 @@ const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "
 
 const SECRET = "kitchen123";
 
-// Updated to the 4 individuals
+// Updated to the 4 individuals for Utensils and 5 for Garbage
 const DEFAULT_UTENSILS_MEMBERS = ["Aman", "Subhram", "Chinmaya", "Pritam"];
 const DEFAULT_GARBAGE_MEMBERS = ["Rahul", "Priya", "Amit", "Sneha", "Vikram"];
 
 const ROTA_API_URL = "/api/rota";
 const ROTA_STORAGE_KEY = "household-rota:members";
+const GARBAGE_APPROVALS_KEY = "household-rota:garbage-approvals";
 
 // 12 working-day cycle matrix (Week 1 & Week 2, Mon to Sat)
 // Member indices: 0: Aman, 1: Subhram, 2: Chinmaya, 3: Pritam
@@ -40,6 +41,12 @@ function getDate(offset) {
   return d;
 }
 
+function formatDateKey(dateObj) {
+  return `${dateObj.getFullYear()}-${String(dateObj.getMonth() + 1).padStart(2, "0")}-${String(
+    dateObj.getDate()
+  ).padStart(2, "0")}`;
+}
+
 // Anchored to Monday, Oct 5, 2026 (Week 1, Day 0)
 function nonSundayIndexFromBase(targetDate) {
   const base = new Date(2026, 9, 5, 12, 0, 0); // Oct 5, 2026 is Monday
@@ -61,28 +68,18 @@ function nonSundayIndexFromBase(targetDate) {
   return ((workingDays % 12) + 12) % 12;
 }
 
-// Rotation engine skipping Sundays
-function getAssigneesForDate(members, targetDate, shiftsPerDay = 2) {
+// Rotation engine for Utensils (skipping Sundays)
+function getUtensilsForDate(members, targetDate) {
   if (!members.length) return [null, null];
-
-  // Sundays have no chores
-  if (targetDate.getDay() === 0) {
-    return [null, null];
-  }
+  if (targetDate.getDay() === 0) return [null, null];
 
   const rotationIndex = nonSundayIndexFromBase(targetDate);
 
-  if (shiftsPerDay === 1) {
-    return [members[rotationIndex % members.length], null];
-  }
-
-  // 4-member balanced 2-week cycle
   if (members.length === 4) {
     const [lunchIdx, dinnerIdx] = TWO_WEEK_UTENSILS_CYCLE[rotationIndex % 12];
     return [members[lunchIdx], members[dinnerIdx]];
   }
 
-  // Fallback for custom member counts
   return [
     members[rotationIndex % members.length],
     members[(rotationIndex + 1) % members.length],
@@ -107,6 +104,15 @@ function readStoredRota() {
     };
   } catch {
     return null;
+  }
+}
+
+function readStoredApprovals() {
+  try {
+    const stored = localStorage.getItem(GARBAGE_APPROVALS_KEY);
+    return stored ? JSON.parse(stored) : {};
+  } catch {
+    return {};
   }
 }
 
@@ -189,6 +195,9 @@ export default function App() {
   const [utensilsMembers, setUtensilsMembers] = useState(() => readStoredRota()?.utensils || DEFAULT_UTENSILS_MEMBERS);
   const [GarbageMembers, setGarbageMembers] = useState(() => readStoredRota()?.garbage || DEFAULT_GARBAGE_MEMBERS);
 
+  // Approval records for Garbage duty: { "YYYY-MM-DD": { [memberName]: "approved" | "missed" } }
+  const [garbageApprovals, setGarbageApprovals] = useState(readStoredApprovals);
+
   const [input, setInput] = useState("");
   const [unlocked, setUnlocked] = useState(false);
   const [showPwInput, setShowPwInput] = useState(false);
@@ -200,11 +209,14 @@ export default function App() {
   const [searchResults, setSearchResults] = useState(null);
 
   const [copied, setCopied] = useState(false);
-  const [daysCount, setDaysCount] = useState(12); // Defaults to show full 12-day 2-week cycle
+  const [daysCount, setDaysCount] = useState(12);
   const [rotaLoaded, setRotaLoaded] = useState(false);
 
   const currentMembersList = activeTab === "utensils" ? utensilsMembers : GarbageMembers;
-  const activeShiftCount = activeTab === "utensils" ? 2 : 1;
+
+  const todayDateObj = getDate(0);
+  const todayKey = formatDateKey(todayDateObj);
+  const isTodaySunday = todayDateObj.getDay() === 0;
 
   useEffect(() => {
     let cancelled = false;
@@ -272,6 +284,22 @@ export default function App() {
 
     return () => window.clearTimeout(timeoutId);
   }, [GarbageMembers, rotaLoaded, utensilsMembers]);
+
+  const toggleGarbageStatus = (dateKey, member, status) => {
+    setGarbageApprovals((prev) => {
+      const dayData = prev[dateKey] || {};
+      const newStatus = dayData[member] === status ? null : status;
+      const updated = {
+        ...prev,
+        [dateKey]: {
+          ...dayData,
+          [member]: newStatus,
+        },
+      };
+      localStorage.setItem(GARBAGE_APPROVALS_KEY, JSON.stringify(updated));
+      return updated;
+    });
+  };
 
   const getUpcomingNonSundays = (count) => {
     const list = [];
@@ -376,7 +404,7 @@ export default function App() {
     const targetDate = new Date(targetDateStr);
     targetDate.setHours(12, 0, 0, 0);
 
-    const [lunch, dinner] = getAssigneesForDate(currentMembersList, targetDate, activeShiftCount);
+    const [lunch, dinner] = getUtensilsForDate(currentMembersList, targetDate);
     const today = new Date();
     today.setHours(12, 0, 0, 0);
     const diffTime = targetDate - today;
@@ -388,56 +416,55 @@ export default function App() {
       dinner,
       offset,
       isSunday: targetDate.getDay() === 0,
+      searchDateKey: formatDateKey(targetDate),
     });
   };
 
-  const copyWeeklyRotaText = () => {
-    const titleEmoji = activeTab === "utensils" ? "🍜" : "🗑️";
-    const titleName = activeTab === "utensils" ? "Utensils Duty" : "Garbage Duty";
-    const lines = [
-      `📅 ${titleEmoji} ${titleName} Rota — Commencing ${getDate(0).toLocaleDateString(undefined, {
-        month: "short",
-        day: "numeric",
-        year: "numeric",
-      })}`,
-    ];
+  const copyRotaText = () => {
+    if (activeTab === "utensils") {
+      const lines = [
+        `📅 🍜 Utensils Duty Rota — Commencing ${getDate(0).toLocaleDateString(undefined, {
+          month: "short",
+          day: "numeric",
+          year: "numeric",
+        })}`,
+      ];
 
-    const nextDays = getUpcomingNonSundays(daysCount);
-    nextDays.forEach((d) => {
-      const [lunch, dinner] = getAssigneesForDate(currentMembersList, d, activeShiftCount);
-      const dayStr = `${DAYS[d.getDay()]} ${d.getDate()} ${MONTHS[d.getMonth()]}`;
-
-      if (activeTab === "utensils") {
+      const nextDays = getUpcomingNonSundays(daysCount);
+      nextDays.forEach((d) => {
+        const [lunch, dinner] = getUtensilsForDate(currentMembersList, d);
+        const dayStr = `${DAYS[d.getDay()]} ${d.getDate()} ${MONTHS[d.getMonth()]}`;
         lines.push(`${dayStr} -> Lunch: ${lunch || "No duty"} | Dinner: ${dinner || "No duty"}`);
-      } else {
-        lines.push(`${dayStr} -> ${lunch || "No duty"}`);
-      }
-    });
+      });
 
-    const textToCopy = lines.join("\n");
-    const textArea = document.createElement("textarea");
-    textArea.value = textToCopy;
-    textArea.style.position = "fixed";
-    textArea.style.top = "0";
-    textArea.style.left = "0";
-    document.body.appendChild(textArea);
-    textArea.focus();
-    textArea.select();
-
-    try {
-      document.execCommand("copy");
+      const textToCopy = lines.join("\n");
+      navigator.clipboard.writeText(textToCopy);
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
-    } catch (err) {
-      console.error("Could not copy rota summary", err);
+    } else {
+      const todayData = garbageApprovals[todayKey] || {};
+      const lines = [
+        `🗑️ Garbage Cleaning Verification — ${todayDateObj.toLocaleDateString(undefined, {
+          month: "short",
+          day: "numeric",
+          year: "numeric",
+        })}`,
+      ];
+
+      GarbageMembers.forEach((member) => {
+        const status = todayData[member];
+        const statusIcon = status === "approved" ? "✅ Cleaned" : status === "missed" ? "❌ Missed" : "⏳ Pending Approval";
+        lines.push(`• ${member}: ${statusIcon}`);
+      });
+
+      const textToCopy = lines.join("\n");
+      navigator.clipboard.writeText(textToCopy);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
     }
-    document.body.removeChild(textArea);
   };
 
-  const todayDateObj = getDate(0);
-  const isTodaySunday = todayDateObj.getDay() === 0;
-  const [todayShift1, todayShift2] = getAssigneesForDate(currentMembersList, todayDateObj, activeShiftCount);
-
+  const [todayLunch, todayDinner] = getUtensilsForDate(utensilsMembers, todayDateObj);
   const upcomingDays = getUpcomingNonSundays(daysCount);
 
   return (
@@ -489,7 +516,7 @@ export default function App() {
             }`}
           >
             <span className="text-xl">🗑️</span>
-            <span>Garbage Rota</span>
+            <span>Garbage Approvals</span>
           </button>
         </nav>
 
@@ -503,23 +530,25 @@ export default function App() {
             }`}
           >
             <span>{activeTab === "utensils" ? "🍽️" : "🗑️"}</span>
-            <span>Active: {activeTab === "utensils" ? "Utensils Duty (2-Week Cycle)" : "Garbage Duty"}</span>
+            <span>
+              {activeTab === "utensils" ? "Active: Utensils (2-Week Cycle)" : "Active: Garbage Verification Roster"}
+            </span>
           </div>
 
           <button
-            onClick={copyWeeklyRotaText}
+            onClick={copyRotaText}
             className="inline-flex items-center gap-2 bg-white hover:bg-slate-50 active:scale-95 transition text-slate-800 font-bold px-4 py-2.5 rounded-xl border-2 border-slate-200 shadow-sm text-sm"
           >
             {copied ? (
               <>
-                <span className="text-emerald-600 font-extrabold text-base">✓</span> Copied Rota
+                <span className="text-emerald-600 font-extrabold text-base">✓</span> Copied
               </>
             ) : (
               <>
                 <svg className="w-5 h-5 text-slate-500" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
                   <path strokeLinecap="round" strokeLinejoin="round" d="M8 5H6a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2v-1M8 5a2 2 0 002 2h2a2 2 0 002-2M8 5a2 2 0 012-2h2a2 2 0 012 2m0 0h2a2 2 0 012 2v3m2 4H10m0 0l3-3m-3 3l3 3" />
                 </svg>
-                <span>Share Rota</span>
+                <span>{activeTab === "utensils" ? "Share Rota" : "Share Statuses"}</span>
               </>
             )}
           </button>
@@ -527,136 +556,210 @@ export default function App() {
 
         {/* Dashboard Grid Layout */}
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
-          {/* LEFT: Active Schedules */}
+          {/* LEFT: Active Views */}
           <div className="lg:col-span-7 xl:col-span-8 space-y-6">
-            {/* Today's Duty Card */}
-            {isTodaySunday ? (
-              <section className="bg-gradient-to-r from-emerald-950 to-teal-900 text-white rounded-3xl shadow-lg p-6 sm:p-8">
-                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-6">
-                  <div>
-                    <span className="text-xs uppercase tracking-widest font-extrabold text-emerald-300">WEEKEND STATUS</span>
-                    <h2 className="text-2xl font-black">Today is Sunday</h2>
-                  </div>
-                  <span className="text-sm font-extrabold bg-emerald-800/85 text-emerald-100 px-4 py-2 rounded-xl border border-emerald-700/50">
-                    ☕ Rest Day
-                  </span>
-                </div>
-                <div className="bg-emerald-950/40 border-2 border-emerald-800/40 rounded-2xl p-6 text-center space-y-2">
-                  <span className="text-4xl block">💆‍♂️</span>
-                  <h3 className="text-lg font-extrabold text-emerald-100">No scheduled duties today!</h3>
-                  <p className="text-emerald-300 text-sm">Sunday is off. The rotation resumes on Monday.</p>
-                </div>
-              </section>
-            ) : (
-              <section className="bg-white border-2 border-slate-200 rounded-3xl p-6 shadow-sm">
-                <div className="flex items-center justify-between border-b pb-4 mb-5 border-slate-100">
-                  <div>
-                    <span className="text-xs uppercase tracking-widest font-extrabold text-indigo-600">TODAY'S SHIFTS</span>
-                    <h2 className="text-2xl font-black text-slate-800">
-                      {DAYS[todayDateObj.getDay()]}, {todayDateObj.getDate()} {MONTHS[todayDateObj.getMonth()]}
-                    </h2>
-                  </div>
-                  <span className="px-3 py-1.5 bg-slate-100 text-slate-700 text-xs font-bold rounded-lg border border-slate-200">
-                    Day Active
-                  </span>
-                </div>
-
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                  <div className="bg-slate-50 border border-slate-200 rounded-2xl p-4 flex items-center gap-4">
-                    <Avatar name={todayShift1} size={48} />
-                    <div>
-                      <span className="text-xs font-black uppercase text-indigo-500 tracking-wider">
-                        {activeTab === "utensils" ? "Lunch Duty" : "Morning Garbage"}
-                      </span>
-                      <h4 className="text-xl font-black text-slate-800">{todayShift1 || "None"}</h4>
-                    </div>
-                  </div>
-
-                  {activeTab === "utensils" && (
-                    <div className="bg-slate-50 border border-slate-200 rounded-2xl p-4 flex items-center gap-4">
-                      <Avatar name={todayShift2} size={48} />
+            {activeTab === "utensils" ? (
+              <>
+                {/* Utensils View */}
+                {isTodaySunday ? (
+                  <section className="bg-gradient-to-r from-emerald-950 to-teal-900 text-white rounded-3xl shadow-lg p-6 sm:p-8">
+                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-6">
                       <div>
-                        <span className="text-xs font-black uppercase text-indigo-500 tracking-wider">
-                          Dinner Duty
-                        </span>
-                        <h4 className="text-xl font-black text-slate-800">{todayShift2 || "None"}</h4>
+                        <span className="text-xs uppercase tracking-widest font-extrabold text-emerald-300">WEEKEND STATUS</span>
+                        <h2 className="text-2xl font-black">Today is Sunday</h2>
+                      </div>
+                      <span className="text-sm font-extrabold bg-emerald-800/85 text-emerald-100 px-4 py-2 rounded-xl border border-emerald-700/50">
+                        ☕ Rest Day
+                      </span>
+                    </div>
+                    <div className="bg-emerald-950/40 border-2 border-emerald-800/40 rounded-2xl p-6 text-center space-y-2">
+                      <span className="text-4xl block">💆‍♂️</span>
+                      <h3 className="text-lg font-extrabold text-emerald-100">No scheduled utensils duty today!</h3>
+                      <p className="text-emerald-300 text-sm">Sunday is off. The rotation resumes on Monday.</p>
+                    </div>
+                  </section>
+                ) : (
+                  <section className="bg-white border-2 border-slate-200 rounded-3xl p-6 shadow-sm">
+                    <div className="flex items-center justify-between border-b pb-4 mb-5 border-slate-100">
+                      <div>
+                        <span className="text-xs uppercase tracking-widest font-extrabold text-indigo-600">TODAY'S SHIFTS</span>
+                        <h2 className="text-2xl font-black text-slate-800">
+                          {DAYS[todayDateObj.getDay()]}, {todayDateObj.getDate()} {MONTHS[todayDateObj.getMonth()]}
+                        </h2>
+                      </div>
+                      <span className="px-3 py-1.5 bg-slate-100 text-slate-700 text-xs font-bold rounded-lg border border-slate-200">
+                        Day Active
+                      </span>
+                    </div>
+
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                      <div className="bg-slate-50 border border-slate-200 rounded-2xl p-4 flex items-center gap-4">
+                        <Avatar name={todayLunch} size={48} />
+                        <div>
+                          <span className="text-xs font-black uppercase text-indigo-500 tracking-wider">Lunch Duty</span>
+                          <h4 className="text-xl font-black text-slate-800">{todayLunch || "None"}</h4>
+                        </div>
+                      </div>
+
+                      <div className="bg-slate-50 border border-slate-200 rounded-2xl p-4 flex items-center gap-4">
+                        <Avatar name={todayDinner} size={48} />
+                        <div>
+                          <span className="text-xs font-black uppercase text-indigo-500 tracking-wider">Dinner Duty</span>
+                          <h4 className="text-xl font-black text-slate-800">{todayDinner || "None"}</h4>
+                        </div>
                       </div>
                     </div>
-                  )}
+                  </section>
+                )}
+
+                {/* Upcoming Days Utensils Table */}
+                <section className="bg-white border-2 border-slate-200 rounded-3xl p-6 shadow-sm">
+                  <div className="flex items-center justify-between mb-4">
+                    <h3 className="text-lg font-black text-slate-800">Upcoming Utensils Schedule</h3>
+                    <div className="flex gap-2">
+                      <button
+                        onClick={() => setDaysCount(6)}
+                        className={`px-3 py-1 rounded-lg text-xs font-bold border ${
+                          daysCount === 6 ? "bg-indigo-600 text-white border-indigo-600" : "bg-white text-slate-600 border-slate-200"
+                        }`}
+                      >
+                        6 Days
+                      </button>
+                      <button
+                        onClick={() => setDaysCount(12)}
+                        className={`px-3 py-1 rounded-lg text-xs font-bold border ${
+                          daysCount === 12 ? "bg-indigo-600 text-white border-indigo-600" : "bg-white text-slate-600 border-slate-200"
+                        }`}
+                      >
+                        12 Days (Full Cycle)
+                      </button>
+                    </div>
+                  </div>
+
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-left border-collapse">
+                      <thead>
+                        <tr className="border-b-2 border-slate-100 text-xs font-black uppercase text-slate-400">
+                          <th className="py-3 px-2">Date & Day</th>
+                          <th className="py-3 px-2">Lunch</th>
+                          <th className="py-3 px-2">Dinner</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-100 text-sm font-semibold">
+                        {upcomingDays.map((d, i) => {
+                          const [lunch, dinner] = getUtensilsForDate(utensilsMembers, d);
+                          return (
+                            <tr key={i} className="hover:bg-slate-50 transition">
+                              <td className="py-3 px-2 font-bold text-slate-700">
+                                {DAYS[d.getDay()]}, {d.getDate()} {MONTHS[d.getMonth()]}
+                              </td>
+                              <td className="py-3 px-2">
+                                <span className="inline-flex items-center gap-2">
+                                  <Avatar name={lunch} size={24} />
+                                  {lunch}
+                                </span>
+                              </td>
+                              <td className="py-3 px-2">
+                                <span className="inline-flex items-center gap-2">
+                                  <Avatar name={dinner} size={24} />
+                                  {dinner}
+                                </span>
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                </section>
+              </>
+            ) : (
+              /* Garbage Approvals View */
+              <section className="bg-white border-2 border-slate-200 rounded-3xl p-6 shadow-sm space-y-6">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b pb-4 border-slate-100">
+                  <div>
+                    <span className="text-xs uppercase tracking-widest font-extrabold text-amber-600">DAILY CHECK-IN</span>
+                    <h2 className="text-2xl font-black text-slate-800">
+                      Garbage Verification ({DAYS[todayDateObj.getDay()]}, {todayDateObj.getDate()} {MONTHS[todayDateObj.getMonth()]})
+                    </h2>
+                  </div>
+                  <span className="self-start sm:self-center text-xs font-bold px-3 py-1.5 bg-amber-50 text-amber-700 border border-amber-200 rounded-lg">
+                    Peer Approved
+                  </span>
+                </div>
+
+                <p className="text-sm text-slate-600">
+                  Did each member clear their waste or complete garbage cleaning today? Tap to approve or mark missed.
+                </p>
+
+                <div className="space-y-3">
+                  {GarbageMembers.map((member) => {
+                    const currentStatus = garbageApprovals[todayKey]?.[member];
+                    return (
+                      <div
+                        key={member}
+                        className={`flex flex-col sm:flex-row sm:items-center justify-between p-4 rounded-2xl border-2 transition gap-3 ${
+                          currentStatus === "approved"
+                            ? "bg-emerald-50/70 border-emerald-300"
+                            : currentStatus === "missed"
+                            ? "bg-rose-50/70 border-rose-300"
+                            : "bg-slate-50 border-slate-200"
+                        }`}
+                      >
+                        <div className="flex items-center gap-3">
+                          <Avatar name={member} size={42} />
+                          <div>
+                            <h4 className="font-extrabold text-base text-slate-800">{member}</h4>
+                            <span className="text-xs font-bold">
+                              {currentStatus === "approved" && (
+                                <span className="text-emerald-700">✅ Cleaned & Approved</span>
+                              )}
+                              {currentStatus === "missed" && <span className="text-rose-700">❌ Not Cleaned</span>}
+                              {!currentStatus && <span className="text-slate-400">⏳ Pending Confirmation</span>}
+                            </span>
+                          </div>
+                        </div>
+
+                        <div className="flex items-center gap-2">
+                          <button
+                            onClick={() => toggleGarbageStatus(todayKey, member, "approved")}
+                            className={`px-3.5 py-2 rounded-xl text-xs font-black transition ${
+                              currentStatus === "approved"
+                                ? "bg-emerald-600 text-white shadow-sm ring-2 ring-emerald-600 ring-offset-1"
+                                : "bg-white hover:bg-emerald-50 text-emerald-700 border border-emerald-300"
+                            }`}
+                          >
+                            ✓ Cleaned
+                          </button>
+                          <button
+                            onClick={() => toggleGarbageStatus(todayKey, member, "missed")}
+                            className={`px-3.5 py-2 rounded-xl text-xs font-black transition ${
+                              currentStatus === "missed"
+                                ? "bg-rose-600 text-white shadow-sm ring-2 ring-rose-600 ring-offset-1"
+                                : "bg-white hover:bg-rose-50 text-rose-700 border border-rose-300"
+                            }`}
+                          >
+                            ✕ Missed
+                          </button>
+                        </div>
+                      </div>
+                    );
+                  })}
                 </div>
               </section>
             )}
-
-            {/* Upcoming Days Table */}
-            <section className="bg-white border-2 border-slate-200 rounded-3xl p-6 shadow-sm">
-              <div className="flex items-center justify-between mb-4">
-                <h3 className="text-lg font-black text-slate-800">Upcoming Non-Sunday Schedule</h3>
-                <div className="flex gap-2">
-                  <button
-                    onClick={() => setDaysCount(6)}
-                    className={`px-3 py-1 rounded-lg text-xs font-bold border ${
-                      daysCount === 6 ? "bg-indigo-600 text-white border-indigo-600" : "bg-white text-slate-600 border-slate-200"
-                    }`}
-                  >
-                    6 Days
-                  </button>
-                  <button
-                    onClick={() => setDaysCount(12)}
-                    className={`px-3 py-1 rounded-lg text-xs font-bold border ${
-                      daysCount === 12 ? "bg-indigo-600 text-white border-indigo-600" : "bg-white text-slate-600 border-slate-200"
-                    }`}
-                  >
-                    12 Days (Full Cycle)
-                  </button>
-                </div>
-              </div>
-
-              <div className="overflow-x-auto">
-                <table className="w-full text-left border-collapse">
-                  <thead>
-                    <tr className="border-b-2 border-slate-100 text-xs font-black uppercase text-slate-400">
-                      <th className="py-3 px-2">Date & Day</th>
-                      <th className="py-3 px-2">{activeTab === "utensils" ? "Lunch" : "Assigned"}</th>
-                      {activeTab === "utensils" && <th className="py-3 px-2">Dinner</th>}
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-slate-100 text-sm font-semibold">
-                    {upcomingDays.map((d, i) => {
-                      const [lunch, dinner] = getAssigneesForDate(currentMembersList, d, activeShiftCount);
-                      return (
-                        <tr key={i} className="hover:bg-slate-50 transition">
-                          <td className="py-3 px-2 font-bold text-slate-700">
-                            {DAYS[d.getDay()]}, {d.getDate()} {MONTHS[d.getMonth()]}
-                          </td>
-                          <td className="py-3 px-2">
-                            <span className="inline-flex items-center gap-2">
-                              <Avatar name={lunch} size={24} />
-                              {lunch}
-                            </span>
-                          </td>
-                          {activeTab === "utensils" && (
-                            <td className="py-3 px-2">
-                              <span className="inline-flex items-center gap-2">
-                                <Avatar name={dinner} size={24} />
-                                {dinner}
-                              </span>
-                            </td>
-                          )}
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
-              </div>
-            </section>
           </div>
 
-          {/* RIGHT: Member Order & Date Checker */}
+          {/* RIGHT: Member Order & Date Lookup */}
           <div className="lg:col-span-5 xl:col-span-4 space-y-6">
             {/* Quick Date Lookup */}
             <section className="bg-white border-2 border-slate-200 rounded-3xl p-6 shadow-sm">
               <h3 className="text-base font-black text-slate-800 mb-2">Check Any Date</h3>
-              <p className="text-xs text-slate-500 mb-4">Select any date to preview who is on duty.</p>
+              <p className="text-xs text-slate-500 mb-4">
+                {activeTab === "utensils"
+                  ? "Select a date to check lunch & dinner assignees."
+                  : "Select a date to view garbage verification history."}
+              </p>
 
               <input
                 type="date"
@@ -666,25 +769,48 @@ export default function App() {
               />
 
               {searchResults && (
-                <div className="mt-4 p-4 rounded-2xl bg-slate-50 border border-slate-200 space-y-2">
+                <div className="mt-4 p-4 rounded-2xl bg-slate-50 border border-slate-200 space-y-3">
                   <div className="text-xs font-bold text-slate-400 uppercase">
                     {DAYS[searchResults.date.getDay()]}, {searchResults.date.getDate()} {MONTHS[searchResults.date.getMonth()]}
                   </div>
 
-                  {searchResults.isSunday ? (
-                    <div className="text-emerald-600 font-extrabold text-sm">Sunday — No Chores</div>
-                  ) : (
-                    <div className="space-y-1 text-sm">
-                      <div>
-                        <span className="font-bold text-slate-500">Lunch: </span>
-                        <span className="font-black text-slate-800">{searchResults.lunch}</span>
-                      </div>
-                      {activeTab === "utensils" && (
+                  {activeTab === "utensils" ? (
+                    searchResults.isSunday ? (
+                      <div className="text-emerald-600 font-extrabold text-sm">Sunday — No Utensil Duty</div>
+                    ) : (
+                      <div className="space-y-1 text-sm">
+                        <div>
+                          <span className="font-bold text-slate-500">Lunch: </span>
+                          <span className="font-black text-slate-800">{searchResults.lunch}</span>
+                        </div>
                         <div>
                           <span className="font-bold text-slate-500">Dinner: </span>
                           <span className="font-black text-slate-800">{searchResults.dinner}</span>
                         </div>
-                      )}
+                      </div>
+                    )
+                  ) : (
+                    <div className="space-y-2">
+                      <div className="text-xs font-bold text-slate-600">Garbage status on this date:</div>
+                      {GarbageMembers.map((member) => {
+                        const status = garbageApprovals[searchResults.searchDateKey]?.[member];
+                        return (
+                          <div key={member} className="flex justify-between items-center text-xs">
+                            <span className="font-semibold text-slate-700">{member}</span>
+                            <span
+                              className={`font-bold px-2 py-0.5 rounded ${
+                                status === "approved"
+                                  ? "bg-emerald-100 text-emerald-800"
+                                  : status === "missed"
+                                  ? "bg-rose-100 text-rose-800"
+                                  : "bg-slate-200 text-slate-600"
+                              }`}
+                            >
+                              {status === "approved" ? "Cleaned" : status === "missed" ? "Missed" : "Unmarked"}
+                            </span>
+                          </div>
+                        );
+                      })}
                     </div>
                   )}
                 </div>
@@ -695,8 +821,12 @@ export default function App() {
             <section className="bg-white border-2 border-slate-200 rounded-3xl p-6 shadow-sm space-y-4">
               <div className="flex items-center justify-between">
                 <div>
-                  <h3 className="text-base font-black text-slate-800">Members Order</h3>
-                  <span className="text-xs text-slate-400">Fixed for balanced cycle</span>
+                  <h3 className="text-base font-black text-slate-800">
+                    {activeTab === "utensils" ? "Utensils Members (4)" : "Garbage Members"}
+                  </h3>
+                  <span className="text-xs text-slate-400">
+                    {activeTab === "utensils" ? "Fixed for balanced cycle" : "Active housemates"}
+                  </span>
                 </div>
                 <button
                   onClick={handleLockClick}
