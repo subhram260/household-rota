@@ -14,19 +14,22 @@
     ]
   },
   "garbageCycle": {
-    "currentIndex": 1,
-    "approvals": {
-      "Pritam": {
-        "status": "approved",
-        "approvedBy": "Pritam",
-        "isProxy": false
-      },
-      "Subhram": {
-        "status": "approved",
-        "approvedBy": "Subhram",
-        "isProxy": false
+    "currentIndex": 2,
+    "approvals": {},
+    "history": [
+      {
+        "id": 1790767796177,
+        "cleaner": "Aman",
+        "dateStr": "Wednesday, 30 Sep 2026",
+        "timestamp": "16:59",
+        "proxies": [
+          {
+            "forMember": "Chinmaya",
+            "approvedBy": "Pritam"
+          }
+        ],
+        "epoch": 1790767796177
       }
-    },
-    "history": []
+    ]
   }
 }
