@@ -27,6 +27,11 @@
         "status": "declined",
         "approvedBy": "Pritam",
         "isProxy": false
+      },
+      "Aman": {
+        "status": "approved",
+        "approvedBy": "Pritam",
+        "isProxy": true
       }
     },
     "history": [
