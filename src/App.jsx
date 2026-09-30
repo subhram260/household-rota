@@ -6,32 +6,30 @@ const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "
 
 const SECRET = "kitchen123";
 
-// Updated to the 4 individuals for Utensils and 5 for Garbage
-const DEFAULT_UTENSILS_MEMBERS = ["Aman", "Subhram", "Chinmaya", "Pritam"];
-const DEFAULT_GARBAGE_MEMBERS = ["Rahul", "Priya", "Amit", "Sneha", "Vikram"];
+// Both Utensils and Garbage use the same 4 members
+const DEFAULT_MEMBERS = ["Aman", "Subhram", "Chinmaya", "Pritam"];
 
 const ROTA_API_URL = "/api/rota";
 const ROTA_STORAGE_KEY = "household-rota:members";
 const GARBAGE_APPROVALS_KEY = "household-rota:garbage-approvals";
 
-// 12 working-day cycle matrix (Week 1 & Week 2, Mon to Sat)
+// 12 working-day cycle matrix starting Wednesday, Sep 30, 2026
 // Member indices: 0: Aman, 1: Subhram, 2: Chinmaya, 3: Pritam
 const TWO_WEEK_UTENSILS_CYCLE = [
-  // --- Week 1 ---
-  [0, 1], // Mon: Aman, Subhram
-  [2, 3], // Tue: Chinmaya, Pritam
-  [1, 0], // Wed: Subhram, Aman
-  [3, 2], // Thu: Pritam, Chinmaya
-  [0, 1], // Fri: Aman, Subhram
-  [2, 3], // Sat: Chinmaya, Pritam
-
-  // --- Week 2 ---
-  [1, 0], // Mon: Subhram, Aman
-  [3, 2], // Tue: Pritam, Chinmaya
-  [0, 1], // Wed: Aman, Subhram
-  [2, 3], // Thu: Chinmaya, Pritam
-  [1, 0], // Fri: Subhram, Aman
-  [3, 2], // Sat: Pritam, Chinmaya
+  [1, 0], // Day 0 (Wed, Sep 30): Subhram, Aman
+  [3, 2], // Day 1 (Thu, Oct 1):  Pritam, Chinmaya
+  [0, 1], // Day 2 (Fri, Oct 2):  Aman, Subhram
+  [2, 3], // Day 3 (Sat, Oct 3):  Chinmaya, Pritam
+  // Sunday skipped
+  [1, 0], // Day 4 (Mon, Oct 5):  Subhram, Aman
+  [3, 2], // Day 5 (Tue, Oct 6):  Pritam, Chinmaya
+  [0, 1], // Day 6 (Wed, Oct 7):  Aman, Subhram
+  [2, 3], // Day 7 (Thu, Oct 8):  Chinmaya, Pritam
+  [1, 0], // Day 8 (Fri, Oct 9):  Subhram, Aman
+  [3, 2], // Day 9 (Sat, Oct 10): Pritam, Chinmaya
+  // Sunday skipped
+  [0, 1], // Day 10 (Mon, Oct 12): Aman, Subhram
+  [2, 3], // Day 11 (Tue, Oct 13): Chinmaya, Pritam
 ];
 
 // DST-safe offset date generation
@@ -47,51 +45,51 @@ function formatDateKey(dateObj) {
   ).padStart(2, "0")}`;
 }
 
-/// Anchored to Wednesday, Sep 30, 2026 (Subhram & Aman -> Index 2)
+// Anchored directly to Wednesday, Sep 30, 2026 (Month is 8 because 0-indexed)
 function nonSundayIndexFromBase(targetDate) {
-  const base = new Date(2026, 8, 30, 12, 0, 0); // Month 8 is September (0-indexed)
+  const base = new Date(2026, 8, 30, 12, 0, 0);
   const target = new Date(targetDate);
   target.setHours(12, 0, 0, 0);
 
   const diffDays = Math.round((target - base) / 86400000);
+  if (diffDays === 0) return 0;
 
   let workingDays = 0;
-  const step = diffDays >= 0 ? 1 : -1;
+  const step = diffDays > 0 ? 1 : -1;
   const cur = new Date(base);
 
-  for (let i = 0; i !== diffDays; i += step) {
-    if (step > 0) cur.setDate(cur.getDate() + 1);
-    if (cur.getDay() !== 0) workingDays += step;
-    if (step < 0) cur.setDate(cur.getDate() - 1);
+  while (Math.round((target - cur) / 86400000) !== 0) {
+    cur.setDate(cur.getDate() + step);
+    if (cur.getDay() !== 0) {
+      workingDays += step;
+    }
   }
 
-  // +2 offset sets Wednesday Sep 30, 2026 to [Subhram, Aman]
-  return (((workingDays + 2) % 12) + 12) % 12;
+  return ((workingDays % 12) + 12) % 12;
 }
-
 
 // Rotation engine for Utensils (skipping Sundays)
 function getUtensilsForDate(members, targetDate) {
-  if (!members.length) return [null, null];
+  const safeMembers = Array.isArray(members) && members.length ? members : DEFAULT_MEMBERS;
   if (targetDate.getDay() === 0) return [null, null];
 
   const rotationIndex = nonSundayIndexFromBase(targetDate);
 
-  if (members.length === 4) {
+  if (safeMembers.length === 4) {
     const [lunchIdx, dinnerIdx] = TWO_WEEK_UTENSILS_CYCLE[rotationIndex % 12];
-    return [members[lunchIdx], members[dinnerIdx]];
+    return [safeMembers[lunchIdx], safeMembers[dinnerIdx]];
   }
 
   return [
-    members[rotationIndex % members.length],
-    members[(rotationIndex + 1) % members.length],
+    safeMembers[rotationIndex % safeMembers.length],
+    safeMembers[(rotationIndex + 1) % safeMembers.length],
   ];
 }
 
 function normalizeMembersList(value, fallback) {
   if (!Array.isArray(value)) return fallback;
   const cleaned = value.filter((member) => typeof member === "string" && member.trim().length > 0);
-  return cleaned.length ? cleaned : fallback;
+  return cleaned.length >= 2 ? cleaned : fallback;
 }
 
 function readStoredRota() {
@@ -101,8 +99,8 @@ function readStoredRota() {
 
     const parsed = JSON.parse(stored);
     return {
-      utensils: normalizeMembersList(parsed?.utensils, DEFAULT_UTENSILS_MEMBERS),
-      garbage: normalizeMembersList(parsed?.garbage, DEFAULT_GARBAGE_MEMBERS),
+      utensils: normalizeMembersList(parsed?.utensils, DEFAULT_MEMBERS),
+      garbage: normalizeMembersList(parsed?.garbage, DEFAULT_MEMBERS),
     };
   } catch {
     return null;
@@ -119,7 +117,8 @@ function readStoredApprovals() {
 }
 
 // Member avatar color palette
-function avatarColor(name) {
+function avatarColor(name = "") {
+  const str = String(name || "?");
   const gradients = [
     "linear-gradient(135deg, #6366f1, #4f46e5)", // Indigo
     "linear-gradient(135deg, #0ea5e9, #0284c7)", // Sky
@@ -130,13 +129,16 @@ function avatarColor(name) {
     "linear-gradient(135deg, #ec4899, #db2777)", // Pink
   ];
   let h = 0;
-  for (let i = 0; i < name.length; i++) {
-    h = (h * 31 + name.charCodeAt(i)) % gradients.length;
+  for (let i = 0; i < str.length; i++) {
+    h = (h * 31 + str.charCodeAt(i)) % gradients.length;
   }
   return gradients[h];
 }
 
-function Avatar({ name, size = 36 }) {
+// Crash-proof Avatar component
+function Avatar({ name = "", size = 36 }) {
+  const initial = name && typeof name === "string" && name.trim().length > 0 ? name.trim()[0].toUpperCase() : "?";
+
   return (
     <span
       className="inline-flex items-center justify-center font-extrabold text-white shrink-0 select-none shadow-md"
@@ -148,7 +150,7 @@ function Avatar({ name, size = 36 }) {
         fontSize: size * 0.4,
       }}
     >
-      {name ? name[0].toUpperCase() : "?"}
+      {initial}
     </span>
   );
 }
@@ -194,10 +196,9 @@ function TrashIcon({ className = "w-4.5 h-4.5" }) {
 export default function App() {
   const [activeTab, setActiveTab] = useState("utensils"); // 'utensils' or 'Garbage'
 
-  const [utensilsMembers, setUtensilsMembers] = useState(() => readStoredRota()?.utensils || DEFAULT_UTENSILS_MEMBERS);
-  const [GarbageMembers, setGarbageMembers] = useState(() => readStoredRota()?.garbage || DEFAULT_GARBAGE_MEMBERS);
+  const [utensilsMembers, setUtensilsMembers] = useState(() => readStoredRota()?.utensils || DEFAULT_MEMBERS);
+  const [GarbageMembers, setGarbageMembers] = useState(() => readStoredRota()?.garbage || DEFAULT_MEMBERS);
 
-  // Approval records for Garbage duty: { "YYYY-MM-DD": { [memberName]: "approved" | "missed" } }
   const [garbageApprovals, setGarbageApprovals] = useState(readStoredApprovals);
 
   const [input, setInput] = useState("");
@@ -214,7 +215,13 @@ export default function App() {
   const [daysCount, setDaysCount] = useState(12);
   const [rotaLoaded, setRotaLoaded] = useState(false);
 
-  const currentMembersList = activeTab === "utensils" ? utensilsMembers : GarbageMembers;
+  // Safe fallback guarantees no crash if someone empties the list
+  const currentMembersList =
+    (activeTab === "utensils" ? utensilsMembers : GarbageMembers)?.length > 0
+      ? activeTab === "utensils"
+        ? utensilsMembers
+        : GarbageMembers
+      : DEFAULT_MEMBERS;
 
   const todayDateObj = getDate(0);
   const todayKey = formatDateKey(todayDateObj);
@@ -232,13 +239,13 @@ export default function App() {
         if (cancelled) return;
 
         if (!data?.fallback) {
-          setUtensilsMembers(normalizeMembersList(data?.members?.utensils, DEFAULT_UTENSILS_MEMBERS));
-          setGarbageMembers(normalizeMembersList(data?.members?.garbage, DEFAULT_GARBAGE_MEMBERS));
+          setUtensilsMembers(normalizeMembersList(data?.members?.utensils, DEFAULT_MEMBERS));
+          setGarbageMembers(normalizeMembersList(data?.members?.garbage, DEFAULT_MEMBERS));
           localStorage.setItem(
             ROTA_STORAGE_KEY,
             JSON.stringify({
-              utensils: normalizeMembersList(data?.members?.utensils, DEFAULT_UTENSILS_MEMBERS),
-              garbage: normalizeMembersList(data?.members?.garbage, DEFAULT_GARBAGE_MEMBERS),
+              utensils: normalizeMembersList(data?.members?.utensils, DEFAULT_MEMBERS),
+              garbage: normalizeMembersList(data?.members?.garbage, DEFAULT_MEMBERS),
             })
           );
         }
@@ -336,6 +343,10 @@ export default function App() {
   };
 
   const remove = (name) => {
+    if (currentMembersList.length <= 2) {
+      setErrorNotification("Cannot delete. At least 2 members are required.");
+      return;
+    }
     if (activeTab === "utensils") {
       setUtensilsMembers((p) => p.filter((m) => m !== name));
     } else {
@@ -439,8 +450,7 @@ export default function App() {
         lines.push(`${dayStr} -> Lunch: ${lunch || "No duty"} | Dinner: ${dinner || "No duty"}`);
       });
 
-      const textToCopy = lines.join("\n");
-      navigator.clipboard.writeText(textToCopy);
+      navigator.clipboard.writeText(lines.join("\n"));
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
     } else {
@@ -453,20 +463,19 @@ export default function App() {
         })}`,
       ];
 
-      GarbageMembers.forEach((member) => {
+      currentMembersList.forEach((member) => {
         const status = todayData[member];
         const statusIcon = status === "approved" ? "✅ Cleaned" : status === "missed" ? "❌ Missed" : "⏳ Pending Approval";
         lines.push(`• ${member}: ${statusIcon}`);
       });
 
-      const textToCopy = lines.join("\n");
-      navigator.clipboard.writeText(textToCopy);
+      navigator.clipboard.writeText(lines.join("\n"));
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
     }
   };
 
-  const [todayLunch, todayDinner] = getUtensilsForDate(utensilsMembers, todayDateObj);
+  const [todayLunch, todayDinner] = getUtensilsForDate(currentMembersList, todayDateObj);
   const upcomingDays = getUpcomingNonSundays(daysCount);
 
   return (
@@ -649,7 +658,7 @@ export default function App() {
                       </thead>
                       <tbody className="divide-y divide-slate-100 text-sm font-semibold">
                         {upcomingDays.map((d, i) => {
-                          const [lunch, dinner] = getUtensilsForDate(utensilsMembers, d);
+                          const [lunch, dinner] = getUtensilsForDate(currentMembersList, d);
                           return (
                             <tr key={i} className="hover:bg-slate-50 transition">
                               <td className="py-3 px-2 font-bold text-slate-700">
@@ -695,7 +704,7 @@ export default function App() {
                 </p>
 
                 <div className="space-y-3">
-                  {GarbageMembers.map((member) => {
+                  {currentMembersList.map((member) => {
                     const currentStatus = garbageApprovals[todayKey]?.[member];
                     return (
                       <div
@@ -794,7 +803,7 @@ export default function App() {
                   ) : (
                     <div className="space-y-2">
                       <div className="text-xs font-bold text-slate-600">Garbage status on this date:</div>
-                      {GarbageMembers.map((member) => {
+                      {currentMembersList.map((member) => {
                         const status = garbageApprovals[searchResults.searchDateKey]?.[member];
                         return (
                           <div key={member} className="flex justify-between items-center text-xs">
@@ -824,11 +833,9 @@ export default function App() {
               <div className="flex items-center justify-between">
                 <div>
                   <h3 className="text-base font-black text-slate-800">
-                    {activeTab === "utensils" ? "Utensils Members (4)" : "Garbage Members"}
+                    {activeTab === "utensils" ? "Utensils Members (4)" : "Garbage Members (4)"}
                   </h3>
-                  <span className="text-xs text-slate-400">
-                    {activeTab === "utensils" ? "Fixed for balanced cycle" : "Active housemates"}
-                  </span>
+                  <span className="text-xs text-slate-400">Fixed for balanced cycle</span>
                 </div>
                 <button
                   onClick={handleLockClick}
