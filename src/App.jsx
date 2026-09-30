@@ -6,12 +6,12 @@ const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "
 
 const SECRET = "kitchen123";
 
-// Both Utensils and Garbage use the same 4 members
+// Both Utensils and Garbage share the 4 flatmates
 const DEFAULT_MEMBERS = ["Aman", "Subhram", "Chinmaya", "Pritam"];
 
 const ROTA_API_URL = "/api/rota";
 const ROTA_STORAGE_KEY = "household-rota:members";
-const GARBAGE_APPROVALS_KEY = "household-rota:garbage-approvals";
+const GARBAGE_CYCLE_STORAGE_KEY = "household-rota:garbage-cycle-state";
 
 // 12 working-day cycle matrix starting Wednesday, Sep 30, 2026
 // Member indices: 0: Aman, 1: Subhram, 2: Chinmaya, 3: Pritam
@@ -37,12 +37,6 @@ function getDate(offset) {
   const d = new Date();
   d.setDate(d.getDate() + offset);
   return d;
-}
-
-function formatDateKey(dateObj) {
-  return `${dateObj.getFullYear()}-${String(dateObj.getMonth() + 1).padStart(2, "0")}-${String(
-    dateObj.getDate()
-  ).padStart(2, "0")}`;
 }
 
 // Anchored directly to Wednesday, Sep 30, 2026 (Month is 8 because 0-indexed)
@@ -107,12 +101,13 @@ function readStoredRota() {
   }
 }
 
-function readStoredApprovals() {
+function readStoredGarbageCycleState() {
   try {
-    const stored = localStorage.getItem(GARBAGE_APPROVALS_KEY);
-    return stored ? JSON.parse(stored) : {};
+    const stored = localStorage.getItem(GARBAGE_CYCLE_STORAGE_KEY);
+    if (!stored) return null;
+    return JSON.parse(stored);
   } catch {
-    return {};
+    return null;
   }
 }
 
@@ -199,7 +194,17 @@ export default function App() {
   const [utensilsMembers, setUtensilsMembers] = useState(() => readStoredRota()?.utensils || DEFAULT_MEMBERS);
   const [GarbageMembers, setGarbageMembers] = useState(() => readStoredRota()?.garbage || DEFAULT_MEMBERS);
 
-  const [garbageApprovals, setGarbageApprovals] = useState(readStoredApprovals);
+  // Dynamic Garbage Cycle state: who is current, who has approved, and history
+  const [garbageCycle, setGarbageCycle] = useState(() => {
+    const saved = readStoredGarbageCycleState();
+    return (
+      saved || {
+        currentIndex: 0,
+        approvals: {}, // { [approverName]: boolean }
+        history: [], // [{ cleaner: string, timestamp: string }]
+      }
+    );
+  });
 
   const [input, setInput] = useState("");
   const [unlocked, setUnlocked] = useState(false);
@@ -215,7 +220,6 @@ export default function App() {
   const [daysCount, setDaysCount] = useState(12);
   const [rotaLoaded, setRotaLoaded] = useState(false);
 
-  // Safe fallback guarantees no crash if someone empties the list
   const currentMembersList =
     (activeTab === "utensils" ? utensilsMembers : GarbageMembers)?.length > 0
       ? activeTab === "utensils"
@@ -224,8 +228,14 @@ export default function App() {
       : DEFAULT_MEMBERS;
 
   const todayDateObj = getDate(0);
-  const todayKey = formatDateKey(todayDateObj);
   const isTodaySunday = todayDateObj.getDay() === 0;
+
+  // Active Garbage Assignee calculations
+  const safeGarbageMembers = GarbageMembers.length ? GarbageMembers : DEFAULT_MEMBERS;
+  const currentGarbageAssignee = safeGarbageMembers[garbageCycle.currentIndex % safeGarbageMembers.length];
+  const requiredApprovers = safeGarbageMembers.filter((m) => m !== currentGarbageAssignee);
+  const approvedCount = requiredApprovers.filter((m) => garbageCycle.approvals[m]).length;
+  const allApproved = requiredApprovers.length > 0 && approvedCount === requiredApprovers.length;
 
   useEffect(() => {
     let cancelled = false;
@@ -262,6 +272,7 @@ export default function App() {
     };
   }, []);
 
+  // Save member order changes
   useEffect(() => {
     if (!rotaLoaded) return;
 
@@ -294,19 +305,58 @@ export default function App() {
     return () => window.clearTimeout(timeoutId);
   }, [GarbageMembers, rotaLoaded, utensilsMembers]);
 
-  const toggleGarbageStatus = (dateKey, member, status) => {
-    setGarbageApprovals((prev) => {
-      const dayData = prev[dateKey] || {};
-      const newStatus = dayData[member] === status ? null : status;
-      const updated = {
-        ...prev,
-        [dateKey]: {
-          ...dayData,
-          [member]: newStatus,
-        },
+  // Persist Garbage Cycle State
+  const saveGarbageCycle = (newState) => {
+    setGarbageCycle(newState);
+    localStorage.setItem(GARBAGE_CYCLE_STORAGE_KEY, JSON.stringify(newState));
+  };
+
+  // Toggle member's approval for current garbage cleaning
+  const toggleGarbageApproval = (approverName) => {
+    const isCurrentlyApproved = !!garbageCycle.approvals[approverName];
+    const newApprovals = {
+      ...garbageCycle.approvals,
+      [approverName]: !isCurrentlyApproved,
+    };
+
+    // Check if that was the final required approval
+    const totalApproved = requiredApprovers.filter((m) =>
+      m === approverName ? !isCurrentlyApproved : !!newApprovals[m]
+    ).length;
+
+    if (totalApproved === requiredApprovers.length) {
+      // Advance to next member
+      const nextIdx = (garbageCycle.currentIndex + 1) % safeGarbageMembers.length;
+      const historyEntry = {
+        cleaner: currentGarbageAssignee,
+        timestamp: new Date().toLocaleDateString(undefined, {
+          month: "short",
+          day: "numeric",
+          hour: "2-digit",
+          minute: "2-digit",
+        }),
       };
-      localStorage.setItem(GARBAGE_APPROVALS_KEY, JSON.stringify(updated));
-      return updated;
+
+      const updatedCycle = {
+        currentIndex: nextIdx,
+        approvals: {}, // Reset approvals for the new person
+        history: [historyEntry, ...(garbageCycle.history || []).slice(0, 7)],
+      };
+      saveGarbageCycle(updatedCycle);
+    } else {
+      saveGarbageCycle({
+        ...garbageCycle,
+        approvals: newApprovals,
+      });
+    }
+  };
+
+  const manualAdvanceGarbage = () => {
+    const nextIdx = (garbageCycle.currentIndex + 1) % safeGarbageMembers.length;
+    saveGarbageCycle({
+      ...garbageCycle,
+      currentIndex: nextIdx,
+      approvals: {},
     });
   };
 
@@ -429,7 +479,6 @@ export default function App() {
       dinner,
       offset,
       isSunday: targetDate.getDay() === 0,
-      searchDateKey: formatDateKey(targetDate),
     });
   };
 
@@ -454,20 +503,14 @@ export default function App() {
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
     } else {
-      const todayData = garbageApprovals[todayKey] || {};
       const lines = [
-        `🗑️ Garbage Cleaning Verification — ${todayDateObj.toLocaleDateString(undefined, {
-          month: "short",
-          day: "numeric",
-          year: "numeric",
-        })}`,
+        `🗑️ Garbage Clearance Duty Status`,
+        `Current Assignee: ${currentGarbageAssignee} (Cleans when bin is full)`,
+        `Approvals: ${approvedCount}/${requiredApprovers.length}`,
+        ...requiredApprovers.map(
+          (m) => `• ${m}: ${garbageCycle.approvals[m] ? "✅ Approved" : "⏳ Pending Approval"}`
+        ),
       ];
-
-      currentMembersList.forEach((member) => {
-        const status = todayData[member];
-        const statusIcon = status === "approved" ? "✅ Cleaned" : status === "missed" ? "❌ Missed" : "⏳ Pending Approval";
-        lines.push(`• ${member}: ${statusIcon}`);
-      });
 
       navigator.clipboard.writeText(lines.join("\n"));
       setCopied(true);
@@ -527,7 +570,7 @@ export default function App() {
             }`}
           >
             <span className="text-xl">🗑️</span>
-            <span>Garbage Approvals</span>
+            <span>Garbage Rotation</span>
           </button>
         </nav>
 
@@ -542,7 +585,7 @@ export default function App() {
           >
             <span>{activeTab === "utensils" ? "🍽️" : "🗑️"}</span>
             <span>
-              {activeTab === "utensils" ? "Active: Utensils (2-Week Cycle)" : "Active: Garbage Verification Roster"}
+              {activeTab === "utensils" ? "Active: Utensils (2-Week Cycle)" : "Active: Garbage Turn-By-Approval"}
             </span>
           </div>
 
@@ -559,7 +602,7 @@ export default function App() {
                 <svg className="w-5 h-5 text-slate-500" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
                   <path strokeLinecap="round" strokeLinejoin="round" d="M8 5H6a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2v-1M8 5a2 2 0 002 2h2a2 2 0 002-2M8 5a2 2 0 012-2h2a2 2 0 012 2m0 0h2a2 2 0 012 2v3m2 4H10m0 0l3-3m-3 3l3 3" />
                 </svg>
-                <span>{activeTab === "utensils" ? "Share Rota" : "Share Statuses"}</span>
+                <span>{activeTab === "utensils" ? "Share Rota" : "Share Status"}</span>
               </>
             )}
           </button>
@@ -685,108 +728,161 @@ export default function App() {
                 </section>
               </>
             ) : (
-              /* Garbage Approvals View */
-              <section className="bg-white border-2 border-slate-200 rounded-3xl p-6 shadow-sm space-y-6">
-                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b pb-4 border-slate-100">
-                  <div>
-                    <span className="text-xs uppercase tracking-widest font-extrabold text-amber-600">DAILY CHECK-IN</span>
-                    <h2 className="text-2xl font-black text-slate-800">
-                      Garbage Verification ({DAYS[todayDateObj.getDay()]}, {todayDateObj.getDate()} {MONTHS[todayDateObj.getMonth()]})
-                    </h2>
+              /* Garbage Approvals View: Single Assignee + Consensus */
+              <div className="space-y-6">
+                {/* Active Assignee Banner */}
+                <section className="bg-gradient-to-br from-amber-500 to-amber-700 text-white rounded-3xl p-6 sm:p-8 shadow-md">
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-6">
+                    <div>
+                      <span className="text-xs uppercase tracking-widest font-black text-amber-200">
+                        NEXT UP WHEN FULL
+                      </span>
+                      <h2 className="text-3xl font-black">Garbage Clearance Turn</h2>
+                    </div>
+                    <span className="self-start sm:self-center bg-amber-900/60 border border-amber-300/30 text-amber-100 px-3.5 py-1.5 rounded-xl text-xs font-black">
+                      {approvedCount} of {requiredApprovers.length} Approvals
+                    </span>
                   </div>
-                  <span className="self-start sm:self-center text-xs font-bold px-3 py-1.5 bg-amber-50 text-amber-700 border border-amber-200 rounded-lg">
-                    Peer Approved
-                  </span>
-                </div>
 
-                <p className="text-sm text-slate-600">
-                  Did each member clear their waste or complete garbage cleaning today? Tap to approve or mark missed.
-                </p>
-
-                <div className="space-y-3">
-                  {currentMembersList.map((member) => {
-                    const currentStatus = garbageApprovals[todayKey]?.[member];
-                    return (
-                      <div
-                        key={member}
-                        className={`flex flex-col sm:flex-row sm:items-center justify-between p-4 rounded-2xl border-2 transition gap-3 ${
-                          currentStatus === "approved"
-                            ? "bg-emerald-50/70 border-emerald-300"
-                            : currentStatus === "missed"
-                            ? "bg-rose-50/70 border-rose-300"
-                            : "bg-slate-50 border-slate-200"
-                        }`}
-                      >
-                        <div className="flex items-center gap-3">
-                          <Avatar name={member} size={42} />
-                          <div>
-                            <h4 className="font-extrabold text-base text-slate-800">{member}</h4>
-                            <span className="text-xs font-bold">
-                              {currentStatus === "approved" && (
-                                <span className="text-emerald-700">✅ Cleaned & Approved</span>
-                              )}
-                              {currentStatus === "missed" && <span className="text-rose-700">❌ Not Cleaned</span>}
-                              {!currentStatus && <span className="text-slate-400">⏳ Pending Confirmation</span>}
-                            </span>
-                          </div>
-                        </div>
-
-                        <div className="flex items-center gap-2">
-                          <button
-                            onClick={() => toggleGarbageStatus(todayKey, member, "approved")}
-                            className={`px-3.5 py-2 rounded-xl text-xs font-black transition ${
-                              currentStatus === "approved"
-                                ? "bg-emerald-600 text-white shadow-sm ring-2 ring-emerald-600 ring-offset-1"
-                                : "bg-white hover:bg-emerald-50 text-emerald-700 border border-emerald-300"
-                            }`}
-                          >
-                            ✓ Cleaned
-                          </button>
-                          <button
-                            onClick={() => toggleGarbageStatus(todayKey, member, "missed")}
-                            className={`px-3.5 py-2 rounded-xl text-xs font-black transition ${
-                              currentStatus === "missed"
-                                ? "bg-rose-600 text-white shadow-sm ring-2 ring-rose-600 ring-offset-1"
-                                : "bg-white hover:bg-rose-50 text-rose-700 border border-rose-300"
-                            }`}
-                          >
-                            ✕ Missed
-                          </button>
-                        </div>
+                  <div className="bg-white/10 backdrop-blur-md rounded-2xl p-5 border border-white/20 flex items-center justify-between gap-4">
+                    <div className="flex items-center gap-4">
+                      <Avatar name={currentGarbageAssignee} size={54} />
+                      <div>
+                        <span className="text-xs font-black text-amber-200 uppercase tracking-wider block">
+                          Assigned Housemate
+                        </span>
+                        <h3 className="text-2xl font-black">{currentGarbageAssignee}</h3>
                       </div>
-                    );
-                  })}
-                </div>
-              </section>
+                    </div>
+
+                    <button
+                      onClick={manualAdvanceGarbage}
+                      className="text-xs font-bold bg-white/20 hover:bg-white/30 text-white px-3 py-2 rounded-xl border border-white/20 transition"
+                      title="Skip or force pass to next person"
+                    >
+                      Skip Turn ➔
+                    </button>
+                  </div>
+                </section>
+
+                {/* Flatmate Peer Approval Card */}
+                <section className="bg-white border-2 border-slate-200 rounded-3xl p-6 shadow-sm space-y-4">
+                  <div className="border-b pb-3 border-slate-100">
+                    <h3 className="text-lg font-black text-slate-800">Flatmate Approvals</h3>
+                    <p className="text-xs text-slate-500 mt-1">
+                      When {currentGarbageAssignee} cleans the full bin, each other flatmate taps below to approve. Once
+                      all {requiredApprovers.length} approve, duty automatically rotates to the next person.
+                    </p>
+                  </div>
+
+                  <div className="space-y-3">
+                    {requiredApprovers.map((member) => {
+                      const hasApproved = !!garbageCycle.approvals[member];
+                      return (
+                        <div
+                          key={member}
+                          className={`flex items-center justify-between p-4 rounded-2xl border-2 transition ${
+                            hasApproved
+                              ? "bg-emerald-50 border-emerald-300"
+                              : "bg-slate-50 border-slate-200"
+                          }`}
+                        >
+                          <div className="flex items-center gap-3">
+                            <Avatar name={member} size={38} />
+                            <div>
+                              <h4 className="font-extrabold text-sm text-slate-800">{member}</h4>
+                              <span className="text-xs font-bold">
+                                {hasApproved ? (
+                                  <span className="text-emerald-700">✓ Has Approved Clean</span>
+                                ) : (
+                                  <span className="text-slate-400">⏳ Pending Approval</span>
+                                )}
+                              </span>
+                            </div>
+                          </div>
+
+                          <button
+                            onClick={() => toggleGarbageApproval(member)}
+                            className={`px-4 py-2 rounded-xl text-xs font-black transition ${
+                              hasApproved
+                                ? "bg-emerald-600 text-white shadow-sm ring-2 ring-emerald-600 ring-offset-1"
+                                : "bg-white hover:bg-slate-100 text-slate-700 border border-slate-300"
+                            }`}
+                          >
+                            {hasApproved ? "Approved ✓" : "I Approve Clean"}
+                          </button>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </section>
+
+                {/* Rotation Order Preview */}
+                <section className="bg-white border-2 border-slate-200 rounded-3xl p-6 shadow-sm space-y-3">
+                  <h3 className="text-base font-black text-slate-800">Upcoming Turn Order</h3>
+                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                    {safeGarbageMembers.map((member, i) => {
+                      const isCurrent = i === garbageCycle.currentIndex % safeGarbageMembers.length;
+                      return (
+                        <div
+                          key={member}
+                          className={`p-3 rounded-2xl border-2 text-center space-y-1 ${
+                            isCurrent
+                              ? "bg-amber-50 border-amber-400"
+                              : "bg-slate-50 border-slate-200 opacity-60"
+                          }`}
+                        >
+                          <span className="text-[10px] font-black uppercase text-slate-400 block">
+                            {isCurrent ? "Active" : `Turn #${((i - garbageCycle.currentIndex + safeGarbageMembers.length) % safeGarbageMembers.length) + 1}`}
+                          </span>
+                          <Avatar name={member} size={32} />
+                          <h4 className="font-black text-xs text-slate-800">{member}</h4>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </section>
+
+                {/* Clearance History */}
+                {garbageCycle.history && garbageCycle.history.length > 0 && (
+                  <section className="bg-white border-2 border-slate-200 rounded-3xl p-6 shadow-sm space-y-3">
+                    <h3 className="text-sm font-black text-slate-800">Recent Completed Cleans</h3>
+                    <ul className="divide-y divide-slate-100 text-xs">
+                      {garbageCycle.history.map((h, idx) => (
+                        <li key={idx} className="py-2.5 flex justify-between items-center">
+                          <span className="font-extrabold text-slate-700">Cleaned by {h.cleaner}</span>
+                          <span className="text-slate-400">{h.timestamp}</span>
+                        </li>
+                      ))}
+                    </ul>
+                  </section>
+                )}
+              </div>
             )}
           </div>
 
           {/* RIGHT: Member Order & Date Lookup */}
           <div className="lg:col-span-5 xl:col-span-4 space-y-6">
-            {/* Quick Date Lookup */}
-            <section className="bg-white border-2 border-slate-200 rounded-3xl p-6 shadow-sm">
-              <h3 className="text-base font-black text-slate-800 mb-2">Check Any Date</h3>
-              <p className="text-xs text-slate-500 mb-4">
-                {activeTab === "utensils"
-                  ? "Select a date to check lunch & dinner assignees."
-                  : "Select a date to view garbage verification history."}
-              </p>
+            {/* Quick Date Lookup for Utensils */}
+            {activeTab === "utensils" ? (
+              <section className="bg-white border-2 border-slate-200 rounded-3xl p-6 shadow-sm">
+                <h3 className="text-base font-black text-slate-800 mb-2">Check Utensils Date</h3>
+                <p className="text-xs text-slate-500 mb-4">Select any date to preview lunch & dinner assignees.</p>
 
-              <input
-                type="date"
-                value={customSearchDate}
-                onChange={handleDateSearch}
-                className="w-full bg-slate-50 border-2 border-slate-200 rounded-xl px-4 py-2.5 font-bold text-sm text-slate-700 focus:outline-indigo-500"
-              />
+                <input
+                  type="date"
+                  value={customSearchDate}
+                  onChange={handleDateSearch}
+                  className="w-full bg-slate-50 border-2 border-slate-200 rounded-xl px-4 py-2.5 font-bold text-sm text-slate-700 focus:outline-indigo-500"
+                />
 
-              {searchResults && (
-                <div className="mt-4 p-4 rounded-2xl bg-slate-50 border border-slate-200 space-y-3">
-                  <div className="text-xs font-bold text-slate-400 uppercase">
-                    {DAYS[searchResults.date.getDay()]}, {searchResults.date.getDate()} {MONTHS[searchResults.date.getMonth()]}
-                  </div>
+                {searchResults && (
+                  <div className="mt-4 p-4 rounded-2xl bg-slate-50 border border-slate-200 space-y-2">
+                    <div className="text-xs font-bold text-slate-400 uppercase">
+                      {DAYS[searchResults.date.getDay()]}, {searchResults.date.getDate()} {MONTHS[searchResults.date.getMonth()]}
+                    </div>
 
-                  {activeTab === "utensils" ? (
-                    searchResults.isSunday ? (
+                    {searchResults.isSunday ? (
                       <div className="text-emerald-600 font-extrabold text-sm">Sunday — No Utensil Duty</div>
                     ) : (
                       <div className="space-y-1 text-sm">
@@ -799,43 +895,29 @@ export default function App() {
                           <span className="font-black text-slate-800">{searchResults.dinner}</span>
                         </div>
                       </div>
-                    )
-                  ) : (
-                    <div className="space-y-2">
-                      <div className="text-xs font-bold text-slate-600">Garbage status on this date:</div>
-                      {currentMembersList.map((member) => {
-                        const status = garbageApprovals[searchResults.searchDateKey]?.[member];
-                        return (
-                          <div key={member} className="flex justify-between items-center text-xs">
-                            <span className="font-semibold text-slate-700">{member}</span>
-                            <span
-                              className={`font-bold px-2 py-0.5 rounded ${
-                                status === "approved"
-                                  ? "bg-emerald-100 text-emerald-800"
-                                  : status === "missed"
-                                  ? "bg-rose-100 text-rose-800"
-                                  : "bg-slate-200 text-slate-600"
-                              }`}
-                            >
-                              {status === "approved" ? "Cleaned" : status === "missed" ? "Missed" : "Unmarked"}
-                            </span>
-                          </div>
-                        );
-                      })}
-                    </div>
-                  )}
-                </div>
-              )}
-            </section>
+                    )}
+                  </div>
+                )}
+              </section>
+            ) : (
+              <section className="bg-white border-2 border-slate-200 rounded-3xl p-6 shadow-sm space-y-2">
+                <h3 className="text-base font-black text-slate-800">How Garbage Rota Works</h3>
+                <ol className="text-xs text-slate-600 space-y-2 list-decimal list-inside leading-relaxed">
+                  <li><strong>One person</strong> is on call to empty the garbage as soon as it becomes full.</li>
+                  <li>After cleaning, the other <strong>3 flatmates</strong> confirm and approve the job.</li>
+                  <li>Once all 3 approve, the duty <strong>automatically hands over</strong> to the next person.</li>
+                </ol>
+              </section>
+            )}
 
             {/* Member Management */}
             <section className="bg-white border-2 border-slate-200 rounded-3xl p-6 shadow-sm space-y-4">
               <div className="flex items-center justify-between">
                 <div>
                   <h3 className="text-base font-black text-slate-800">
-                    {activeTab === "utensils" ? "Utensils Members (4)" : "Garbage Members (4)"}
+                    {activeTab === "utensils" ? "Utensils Members" : "Garbage Members"}
                   </h3>
-                  <span className="text-xs text-slate-400">Fixed for balanced cycle</span>
+                  <span className="text-xs text-slate-400">Order determines rotation</span>
                 </div>
                 <button
                   onClick={handleLockClick}
