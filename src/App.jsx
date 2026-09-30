@@ -6,12 +6,13 @@ const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "
 
 const SECRET = "kitchen123";
 
-// Both Utensils and Garbage share the 4 flatmates
+// Shared members across both rotas
 const DEFAULT_MEMBERS = ["Aman", "Subhram", "Chinmaya", "Pritam"];
 
 const ROTA_API_URL = "/api/rota";
 const ROTA_STORAGE_KEY = "household-rota:members";
 const GARBAGE_CYCLE_STORAGE_KEY = "household-rota:garbage-cycle-state";
+const DEVICE_USER_STORAGE_KEY = "household-rota:device-current-user";
 
 // 12 working-day cycle matrix starting Wednesday, Sep 30, 2026
 // Member indices: 0: Aman, 1: Subhram, 2: Chinmaya, 3: Pritam
@@ -39,7 +40,7 @@ function getDate(offset) {
   return d;
 }
 
-// Anchored directly to Wednesday, Sep 30, 2026 (Month is 8 because 0-indexed)
+// Anchored directly to Wednesday, Sep 30, 2026
 function nonSundayIndexFromBase(targetDate) {
   const base = new Date(2026, 8, 30, 12, 0, 0);
   const target = new Date(targetDate);
@@ -111,17 +112,16 @@ function readStoredGarbageCycleState() {
   }
 }
 
-// Member avatar color palette
 function avatarColor(name = "") {
   const str = String(name || "?");
   const gradients = [
-    "linear-gradient(135deg, #6366f1, #4f46e5)", // Indigo
-    "linear-gradient(135deg, #0ea5e9, #0284c7)", // Sky
-    "linear-gradient(135deg, #10b981, #059669)", // Emerald
-    "linear-gradient(135deg, #f59e0b, #d97706)", // Amber
-    "linear-gradient(135deg, #ef4444, #dc2626)", // Red
-    "linear-gradient(135deg, #8b5cf6, #7c3aed)", // Violet
-    "linear-gradient(135deg, #ec4899, #db2777)", // Pink
+    "linear-gradient(135deg, #6366f1, #4f46e5)",
+    "linear-gradient(135deg, #0ea5e9, #0284c7)",
+    "linear-gradient(135deg, #10b981, #059669)",
+    "linear-gradient(135deg, #f59e0b, #d97706)",
+    "linear-gradient(135deg, #ef4444, #dc2626)",
+    "linear-gradient(135deg, #8b5cf6, #7c3aed)",
+    "linear-gradient(135deg, #ec4899, #db2777)",
   ];
   let h = 0;
   for (let i = 0; i < str.length; i++) {
@@ -130,7 +130,6 @@ function avatarColor(name = "") {
   return gradients[h];
 }
 
-// Crash-proof Avatar component
 function Avatar({ name = "", size = 36 }) {
   const initial = name && typeof name === "string" && name.trim().length > 0 ? name.trim()[0].toUpperCase() : "?";
 
@@ -194,14 +193,19 @@ export default function App() {
   const [utensilsMembers, setUtensilsMembers] = useState(() => readStoredRota()?.utensils || DEFAULT_MEMBERS);
   const [GarbageMembers, setGarbageMembers] = useState(() => readStoredRota()?.garbage || DEFAULT_MEMBERS);
 
-  // Dynamic Garbage Cycle state: who is current, who has approved, and history
+  // Identify who is viewing this screen on their phone
+  const [currentPhoneUser, setCurrentPhoneUser] = useState(() => {
+    return localStorage.getItem(DEVICE_USER_STORAGE_KEY) || DEFAULT_MEMBERS[0];
+  });
+
+  // Dynamic Garbage Cycle state: who is current, approvals map, and history
   const [garbageCycle, setGarbageCycle] = useState(() => {
     const saved = readStoredGarbageCycleState();
     return (
       saved || {
         currentIndex: 0,
-        approvals: {}, // { [approverName]: boolean }
-        history: [], // [{ cleaner: string, timestamp: string }]
+        approvals: {}, // { [approverName]: 'approved' | 'declined' }
+        history: [],
       }
     );
   });
@@ -230,12 +234,11 @@ export default function App() {
   const todayDateObj = getDate(0);
   const isTodaySunday = todayDateObj.getDay() === 0;
 
-  // Active Garbage Assignee calculations
+  // Active Garbage Assignee and voter lists
   const safeGarbageMembers = GarbageMembers.length ? GarbageMembers : DEFAULT_MEMBERS;
   const currentGarbageAssignee = safeGarbageMembers[garbageCycle.currentIndex % safeGarbageMembers.length];
   const requiredApprovers = safeGarbageMembers.filter((m) => m !== currentGarbageAssignee);
-  const approvedCount = requiredApprovers.filter((m) => garbageCycle.approvals[m]).length;
-  const allApproved = requiredApprovers.length > 0 && approvedCount === requiredApprovers.length;
+  const approvedCount = requiredApprovers.filter((m) => garbageCycle.approvals[m] === "approved").length;
 
   useEffect(() => {
     let cancelled = false;
@@ -272,7 +275,6 @@ export default function App() {
     };
   }, []);
 
-  // Save member order changes
   useEffect(() => {
     if (!rotaLoaded) return;
 
@@ -305,27 +307,32 @@ export default function App() {
     return () => window.clearTimeout(timeoutId);
   }, [GarbageMembers, rotaLoaded, utensilsMembers]);
 
-  // Persist Garbage Cycle State
   const saveGarbageCycle = (newState) => {
     setGarbageCycle(newState);
     localStorage.setItem(GARBAGE_CYCLE_STORAGE_KEY, JSON.stringify(newState));
   };
 
-  // Toggle member's approval for current garbage cleaning
-  const toggleGarbageApproval = (approverName) => {
-    const isCurrentlyApproved = !!garbageCycle.approvals[approverName];
+  const handleSetUser = (name) => {
+    setCurrentPhoneUser(name);
+    localStorage.setItem(DEVICE_USER_STORAGE_KEY, name);
+  };
+
+  // Submit approval or decline decision from phone
+  const submitDecision = (decision) => {
+    if (!currentPhoneUser || currentPhoneUser === currentGarbageAssignee) return;
+
     const newApprovals = {
       ...garbageCycle.approvals,
-      [approverName]: !isCurrentlyApproved,
+      [currentPhoneUser]: decision,
     };
 
-    // Check if that was the final required approval
+    // Check if everyone approved
     const totalApproved = requiredApprovers.filter((m) =>
-      m === approverName ? !isCurrentlyApproved : !!newApprovals[m]
+      m === currentPhoneUser ? decision === "approved" : newApprovals[m] === "approved"
     ).length;
 
     if (totalApproved === requiredApprovers.length) {
-      // Advance to next member
+      // Advance to next flatmate
       const nextIdx = (garbageCycle.currentIndex + 1) % safeGarbageMembers.length;
       const historyEntry = {
         cleaner: currentGarbageAssignee,
@@ -339,7 +346,7 @@ export default function App() {
 
       const updatedCycle = {
         currentIndex: nextIdx,
-        approvals: {}, // Reset approvals for the new person
+        approvals: {}, // Reset for next person
         history: [historyEntry, ...(garbageCycle.history || []).slice(0, 7)],
       };
       saveGarbageCycle(updatedCycle);
@@ -504,11 +511,11 @@ export default function App() {
       setTimeout(() => setCopied(false), 2000);
     } else {
       const lines = [
-        `🗑️ Garbage Clearance Duty Status`,
-        `Current Assignee: ${currentGarbageAssignee} (Cleans when bin is full)`,
+        `🗑️️ Garbage Clearance Duty Status`,
+        `Current Assignee: ${currentGarbageAssignee}`,
         `Approvals: ${approvedCount}/${requiredApprovers.length}`,
         ...requiredApprovers.map(
-          (m) => `• ${m}: ${garbageCycle.approvals[m] ? "✅ Approved" : "⏳ Pending Approval"}`
+          (m) => `• ${m}: ${garbageCycle.approvals[m] || "Pending"}`
         ),
       ];
 
@@ -521,41 +528,74 @@ export default function App() {
   const [todayLunch, todayDinner] = getUtensilsForDate(currentMembersList, todayDateObj);
   const upcomingDays = getUpcomingNonSundays(daysCount);
 
+  const currentUserDecision = garbageCycle.approvals[currentPhoneUser];
+
   return (
-    <div className="min-h-screen bg-slate-50 text-slate-800 flex flex-col items-center p-4 sm:p-6 md:py-10">
-      <div className="w-full max-w-5xl space-y-6">
+    <div className="min-h-screen bg-slate-50 text-slate-800 flex flex-col items-center p-3 sm:p-6 md:py-10">
+      <div className="w-full max-w-5xl space-y-5">
         {/* Error Notification Banner */}
         {errorNotification && (
-          <div className="bg-rose-50 border-2 border-rose-200 text-rose-800 rounded-2xl p-5 flex items-start justify-between shadow-sm">
-            <div className="flex items-center gap-3">
-              <span className="text-2xl">⚠️</span>
-              <p className="font-bold text-base">{errorNotification}</p>
+          <div className="bg-rose-50 border-2 border-rose-200 text-rose-800 rounded-2xl p-4 flex items-start justify-between shadow-sm">
+            <div className="flex items-center gap-2">
+              <span className="text-xl">⚠️️</span>
+              <p className="font-bold text-sm">{errorNotification}</p>
             </div>
             <button
               onClick={() => setErrorNotification("")}
-              className="text-rose-500 hover:text-rose-700 font-extrabold text-xl px-2 hover:bg-rose-100 rounded-lg transition"
+              className="text-rose-500 font-extrabold text-lg px-1 hover:bg-rose-100 rounded-lg"
             >
               ✕
             </button>
           </div>
         )}
 
+        {/* Device Identity Selector: Who is using this phone */}
+        <div className="bg-white border-2 border-slate-200/90 rounded-2xl p-3 sm:p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3 shadow-xs">
+          <div className="flex items-center gap-2">
+            <span className="text-xl">📱</span>
+            <div>
+              <span className="text-[10px] font-black uppercase tracking-wider text-slate-400 block">
+                Your Phone Profile
+              </span>
+              <span className="font-extrabold text-sm text-slate-800">
+                You are: <span className="text-indigo-600 font-black">{currentPhoneUser}</span>
+              </span>
+            </div>
+          </div>
+
+          <div className="flex items-center gap-1 overflow-x-auto pb-1 sm:pb-0">
+            {safeGarbageMembers.map((name) => (
+              <button
+                key={name}
+                onClick={() => handleSetUser(name)}
+                className={`px-3 py-1.5 rounded-xl text-xs font-black transition shrink-0 ${
+                  currentPhoneUser === name
+                    ? "bg-slate-900 text-white shadow-xs"
+                    : "bg-slate-100 text-slate-600 hover:bg-slate-200"
+                }`}
+              >
+                {name}
+              </button>
+            ))}
+          </div>
+        </div>
+
         {/* Task Menu Header */}
-        <nav className="grid grid-cols-2 p-2 bg-slate-200/70 border-2 border-slate-300/40 rounded-2xl gap-2">
+        <nav className="grid grid-cols-2 p-1.5 bg-slate-200/70 border-2 border-slate-300/40 rounded-2xl gap-2">
           <button
             onClick={() => {
               setActiveTab("utensils");
               setSearchResults(null);
               setCustomSearchDate("");
             }}
-            className={`flex items-center justify-center gap-3 py-4 rounded-xl font-black text-base transition duration-200 active:scale-95 ${
+            className={`flex items-center justify-center gap-2 py-3 sm:py-3.5 rounded-xl font-black text-sm sm:text-base transition duration-200 active:scale-95 ${
               activeTab === "utensils"
                 ? "bg-indigo-600 text-white shadow-md border-b-4 border-indigo-800"
                 : "text-slate-600 hover:bg-slate-300 hover:text-slate-900"
             }`}
           >
-            <span className="text-xl">🍜</span>
-            <span>Utensils Rota</span>
+            <span className="text-lg">🍜</span>
+            <span>Utensils</span>
           </button>
           <button
             onClick={() => {
@@ -563,129 +603,114 @@ export default function App() {
               setSearchResults(null);
               setCustomSearchDate("");
             }}
-            className={`flex items-center justify-center gap-3 py-4 rounded-xl font-black text-base transition duration-200 active:scale-95 ${
+            className={`flex items-center justify-center gap-2 py-3 sm:py-3.5 rounded-xl font-black text-sm sm:text-base transition duration-200 active:scale-95 ${
               activeTab === "Garbage"
                 ? "bg-amber-600 text-white shadow-md border-b-4 border-amber-800"
                 : "text-slate-600 hover:bg-slate-300 hover:text-slate-900"
             }`}
           >
-            <span className="text-xl">🗑️</span>
-            <span>Garbage Rotation</span>
+            <span className="text-lg">🗑️</span>
+            <span>Garbage</span>
           </button>
         </nav>
 
-        {/* Compact Navigation Bar */}
-        <header className="flex items-center justify-between gap-4 pb-4 border-b-2 border-slate-200">
+        {/* Sub-Header & Share */}
+        <header className="flex items-center justify-between gap-3 pb-2 border-b border-slate-200">
           <div
-            className={`inline-flex items-center gap-2 px-4 py-2 border-2 rounded-full text-sm font-extrabold tracking-wider uppercase transition ${
+            className={`inline-flex items-center gap-1.5 px-3 py-1.5 border rounded-full text-xs font-extrabold tracking-wider uppercase ${
               activeTab === "utensils"
-                ? "bg-indigo-50 border-indigo-100 text-indigo-700"
-                : "bg-amber-50 border-amber-100 text-amber-700"
+                ? "bg-indigo-50 border-indigo-200 text-indigo-700"
+                : "bg-amber-50 border-amber-200 text-amber-700"
             }`}
           >
             <span>{activeTab === "utensils" ? "🍽️" : "🗑️"}</span>
-            <span>
-              {activeTab === "utensils" ? "Active: Utensils (2-Week Cycle)" : "Active: Garbage Turn-By-Approval"}
-            </span>
+            <span>{activeTab === "utensils" ? "Utensils 2-Week Cycle" : "Garbage Approval"}</span>
           </div>
 
           <button
             onClick={copyRotaText}
-            className="inline-flex items-center gap-2 bg-white hover:bg-slate-50 active:scale-95 transition text-slate-800 font-bold px-4 py-2.5 rounded-xl border-2 border-slate-200 shadow-sm text-sm"
+            className="inline-flex items-center gap-1.5 bg-white hover:bg-slate-50 active:scale-95 transition text-slate-800 font-bold px-3 py-1.5 rounded-xl border border-slate-200 shadow-xs text-xs"
           >
             {copied ? (
-              <>
-                <span className="text-emerald-600 font-extrabold text-base">✓</span> Copied
-              </>
+              <span className="text-emerald-600 font-black">✓ Copied</span>
             ) : (
-              <>
-                <svg className="w-5 h-5 text-slate-500" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M8 5H6a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2v-1M8 5a2 2 0 002 2h2a2 2 0 002-2M8 5a2 2 0 012-2h2a2 2 0 012 2m0 0h2a2 2 0 012 2v3m2 4H10m0 0l3-3m-3 3l3 3" />
-                </svg>
-                <span>{activeTab === "utensils" ? "Share Rota" : "Share Status"}</span>
-              </>
+              <span>Share Rota</span>
             )}
           </button>
         </header>
 
         {/* Dashboard Grid Layout */}
-        <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
+        <div className="grid grid-cols-1 lg:grid-cols-12 gap-5">
           {/* LEFT: Active Views */}
-          <div className="lg:col-span-7 xl:col-span-8 space-y-6">
+          <div className="lg:col-span-7 xl:col-span-8 space-y-5">
             {activeTab === "utensils" ? (
               <>
                 {/* Utensils View */}
                 {isTodaySunday ? (
-                  <section className="bg-gradient-to-r from-emerald-950 to-teal-900 text-white rounded-3xl shadow-lg p-6 sm:p-8">
-                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-6">
-                      <div>
-                        <span className="text-xs uppercase tracking-widest font-extrabold text-emerald-300">WEEKEND STATUS</span>
-                        <h2 className="text-2xl font-black">Today is Sunday</h2>
-                      </div>
-                      <span className="text-sm font-extrabold bg-emerald-800/85 text-emerald-100 px-4 py-2 rounded-xl border border-emerald-700/50">
-                        ☕ Rest Day
-                      </span>
-                    </div>
-                    <div className="bg-emerald-950/40 border-2 border-emerald-800/40 rounded-2xl p-6 text-center space-y-2">
-                      <span className="text-4xl block">💆‍♂️</span>
-                      <h3 className="text-lg font-extrabold text-emerald-100">No scheduled utensils duty today!</h3>
-                      <p className="text-emerald-300 text-sm">Sunday is off. The rotation resumes on Monday.</p>
-                    </div>
+                  <section className="bg-gradient-to-r from-emerald-950 to-teal-900 text-white rounded-3xl p-6 shadow-md">
+                    <span className="text-xs uppercase tracking-widest font-extrabold text-emerald-300">
+                      WEEKEND STATUS
+                    </span>
+                    <h2 className="text-2xl font-black mt-1">Today is Sunday</h2>
+                    <p className="text-emerald-200 text-sm mt-2">☕ Rest Day — No utensils chore scheduled.</p>
                   </section>
                 ) : (
-                  <section className="bg-white border-2 border-slate-200 rounded-3xl p-6 shadow-sm">
-                    <div className="flex items-center justify-between border-b pb-4 mb-5 border-slate-100">
+                  <section className="bg-white border-2 border-slate-200 rounded-3xl p-5 sm:p-6 shadow-xs">
+                    <div className="border-b pb-3 mb-4 border-slate-100 flex items-center justify-between">
                       <div>
-                        <span className="text-xs uppercase tracking-widest font-extrabold text-indigo-600">TODAY'S SHIFTS</span>
-                        <h2 className="text-2xl font-black text-slate-800">
+                        <span className="text-[10px] uppercase tracking-widest font-black text-indigo-600">
+                          TODAY'S ROTATION
+                        </span>
+                        <h2 className="text-xl sm:text-2xl font-black text-slate-800">
                           {DAYS[todayDateObj.getDay()]}, {todayDateObj.getDate()} {MONTHS[todayDateObj.getMonth()]}
                         </h2>
                       </div>
-                      <span className="px-3 py-1.5 bg-slate-100 text-slate-700 text-xs font-bold rounded-lg border border-slate-200">
-                        Day Active
-                      </span>
                     </div>
 
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                      <div className="bg-slate-50 border border-slate-200 rounded-2xl p-4 flex items-center gap-4">
-                        <Avatar name={todayLunch} size={48} />
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 sm:gap-4">
+                      <div className="bg-slate-50 border border-slate-200/90 rounded-2xl p-4 flex items-center gap-3">
+                        <Avatar name={todayLunch} size={44} />
                         <div>
-                          <span className="text-xs font-black uppercase text-indigo-500 tracking-wider">Lunch Duty</span>
-                          <h4 className="text-xl font-black text-slate-800">{todayLunch || "None"}</h4>
+                          <span className="text-[10px] font-black uppercase text-indigo-500 tracking-wider">
+                            Lunch Duty
+                          </span>
+                          <h4 className="text-lg font-black text-slate-800">{todayLunch || "None"}</h4>
                         </div>
                       </div>
 
-                      <div className="bg-slate-50 border border-slate-200 rounded-2xl p-4 flex items-center gap-4">
-                        <Avatar name={todayDinner} size={48} />
+                      <div className="bg-slate-50 border border-slate-200/90 rounded-2xl p-4 flex items-center gap-3">
+                        <Avatar name={todayDinner} size={44} />
                         <div>
-                          <span className="text-xs font-black uppercase text-indigo-500 tracking-wider">Dinner Duty</span>
-                          <h4 className="text-xl font-black text-slate-800">{todayDinner || "None"}</h4>
+                          <span className="text-[10px] font-black uppercase text-indigo-500 tracking-wider">
+                            Dinner Duty
+                          </span>
+                          <h4 className="text-lg font-black text-slate-800">{todayDinner || "None"}</h4>
                         </div>
                       </div>
                     </div>
                   </section>
                 )}
 
-                {/* Upcoming Days Utensils Table */}
-                <section className="bg-white border-2 border-slate-200 rounded-3xl p-6 shadow-sm">
-                  <div className="flex items-center justify-between mb-4">
-                    <h3 className="text-lg font-black text-slate-800">Upcoming Utensils Schedule</h3>
-                    <div className="flex gap-2">
+                {/* Upcoming Utensils Table */}
+                <section className="bg-white border-2 border-slate-200 rounded-3xl p-5 sm:p-6 shadow-xs">
+                  <div className="flex items-center justify-between mb-3">
+                    <h3 className="text-base sm:text-lg font-black text-slate-800">Upcoming Non-Sunday Schedule</h3>
+                    <div className="flex gap-1.5">
                       <button
                         onClick={() => setDaysCount(6)}
-                        className={`px-3 py-1 rounded-lg text-xs font-bold border ${
+                        className={`px-2.5 py-1 rounded-lg text-xs font-bold border ${
                           daysCount === 6 ? "bg-indigo-600 text-white border-indigo-600" : "bg-white text-slate-600 border-slate-200"
                         }`}
                       >
-                        6 Days
+                        6d
                       </button>
                       <button
                         onClick={() => setDaysCount(12)}
-                        className={`px-3 py-1 rounded-lg text-xs font-bold border ${
+                        className={`px-2.5 py-1 rounded-lg text-xs font-bold border ${
                           daysCount === 12 ? "bg-indigo-600 text-white border-indigo-600" : "bg-white text-slate-600 border-slate-200"
                         }`}
                       >
-                        12 Days (Full Cycle)
+                        12d (Full)
                       </button>
                     </div>
                   </div>
@@ -693,10 +718,10 @@ export default function App() {
                   <div className="overflow-x-auto">
                     <table className="w-full text-left border-collapse">
                       <thead>
-                        <tr className="border-b-2 border-slate-100 text-xs font-black uppercase text-slate-400">
-                          <th className="py-3 px-2">Date & Day</th>
-                          <th className="py-3 px-2">Lunch</th>
-                          <th className="py-3 px-2">Dinner</th>
+                        <tr className="border-b border-slate-100 text-[11px] font-black uppercase text-slate-400">
+                          <th className="py-2.5 px-2">Day</th>
+                          <th className="py-2.5 px-2">Lunch</th>
+                          <th className="py-2.5 px-2">Dinner</th>
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-slate-100 text-sm font-semibold">
@@ -704,18 +729,18 @@ export default function App() {
                           const [lunch, dinner] = getUtensilsForDate(currentMembersList, d);
                           return (
                             <tr key={i} className="hover:bg-slate-50 transition">
-                              <td className="py-3 px-2 font-bold text-slate-700">
+                              <td className="py-2.5 px-2 font-bold text-slate-700">
                                 {DAYS[d.getDay()]}, {d.getDate()} {MONTHS[d.getMonth()]}
                               </td>
-                              <td className="py-3 px-2">
-                                <span className="inline-flex items-center gap-2">
-                                  <Avatar name={lunch} size={24} />
+                              <td className="py-2.5 px-2">
+                                <span className="inline-flex items-center gap-1.5">
+                                  <Avatar name={lunch} size={22} />
                                   {lunch}
                                 </span>
                               </td>
-                              <td className="py-3 px-2">
-                                <span className="inline-flex items-center gap-2">
-                                  <Avatar name={dinner} size={24} />
+                              <td className="py-2.5 px-2">
+                                <span className="inline-flex items-center gap-1.5">
+                                  <Avatar name={dinner} size={22} />
                                   {dinner}
                                 </span>
                               </td>
@@ -728,164 +753,168 @@ export default function App() {
                 </section>
               </>
             ) : (
-              /* Garbage Approvals View: Single Assignee + Consensus */
-              <div className="space-y-6">
+              /* Garbage Approvals View: Mobile-Friendly Buttons */
+              <div className="space-y-5">
                 {/* Active Assignee Banner */}
-                <section className="bg-gradient-to-br from-amber-500 to-amber-700 text-white rounded-3xl p-6 sm:p-8 shadow-md">
-                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-6">
+                <section className="bg-gradient-to-br from-amber-500 to-amber-700 text-white rounded-3xl p-5 sm:p-7 shadow-md">
+                  <div className="flex items-center justify-between gap-3 mb-4">
                     <div>
-                      <span className="text-xs uppercase tracking-widest font-black text-amber-200">
-                        NEXT UP WHEN FULL
+                      <span className="text-[10px] uppercase tracking-widest font-black text-amber-200">
+                        CLEAN WHEN FULL
                       </span>
-                      <h2 className="text-3xl font-black">Garbage Clearance Turn</h2>
+                      <h2 className="text-2xl font-black">Garbage Turn</h2>
                     </div>
-                    <span className="self-start sm:self-center bg-amber-900/60 border border-amber-300/30 text-amber-100 px-3.5 py-1.5 rounded-xl text-xs font-black">
+                    <span className="bg-amber-900/60 border border-amber-300/30 text-amber-100 px-3 py-1 rounded-xl text-xs font-black">
                       {approvedCount} of {requiredApprovers.length} Approvals
                     </span>
                   </div>
 
-                  <div className="bg-white/10 backdrop-blur-md rounded-2xl p-5 border border-white/20 flex items-center justify-between gap-4">
-                    <div className="flex items-center gap-4">
-                      <Avatar name={currentGarbageAssignee} size={54} />
+                  <div className="bg-white/10 backdrop-blur-md rounded-2xl p-4 border border-white/20 flex items-center justify-between gap-3">
+                    <div className="flex items-center gap-3">
+                      <Avatar name={currentGarbageAssignee} size={50} />
                       <div>
-                        <span className="text-xs font-black text-amber-200 uppercase tracking-wider block">
-                          Assigned Housemate
+                        <span className="text-[10px] font-black text-amber-200 uppercase tracking-wider block">
+                          Assigned To Empty Bin
                         </span>
-                        <h3 className="text-2xl font-black">{currentGarbageAssignee}</h3>
+                        <h3 className="text-xl sm:text-2xl font-black">{currentGarbageAssignee}</h3>
                       </div>
                     </div>
 
                     <button
                       onClick={manualAdvanceGarbage}
-                      className="text-xs font-bold bg-white/20 hover:bg-white/30 text-white px-3 py-2 rounded-xl border border-white/20 transition"
-                      title="Skip or force pass to next person"
+                      className="text-xs font-bold bg-white/20 hover:bg-white/30 text-white px-3 py-1.5 rounded-xl border border-white/20 transition"
+                      title="Skip turn"
                     >
-                      Skip Turn ➔
+                      Skip ➔
                     </button>
                   </div>
                 </section>
 
-                {/* Flatmate Peer Approval Card */}
-                <section className="bg-white border-2 border-slate-200 rounded-3xl p-6 shadow-sm space-y-4">
+                {/* Mobile Action Card for Current Phone User */}
+                <section className="bg-white border-2 border-slate-200 rounded-3xl p-5 sm:p-6 shadow-xs space-y-4">
                   <div className="border-b pb-3 border-slate-100">
-                    <h3 className="text-lg font-black text-slate-800">Flatmate Approvals</h3>
-                    <p className="text-xs text-slate-500 mt-1">
-                      When {currentGarbageAssignee} cleans the full bin, each other flatmate taps below to approve. Once
-                      all {requiredApprovers.length} approve, duty automatically rotates to the next person.
-                    </p>
+                    <span className="text-[10px] font-black uppercase text-amber-600 tracking-wider">
+                      Your Phone Action
+                    </span>
+                    <h3 className="text-lg font-black text-slate-800">
+                      Did {currentGarbageAssignee} clean the garbage?
+                    </h3>
                   </div>
 
-                  <div className="space-y-3">
+                  {currentPhoneUser === currentGarbageAssignee ? (
+                    <div className="bg-amber-50 border-2 border-amber-200 text-amber-900 rounded-2xl p-4 text-center space-y-1">
+                      <span className="text-2xl block">🧹</span>
+                      <h4 className="font-black text-base">It's your turn to clean the bin!</h4>
+                      <p className="text-xs text-amber-700">
+                        Once you finish cleaning, your flatmates ({requiredApprovers.join(", ")}) will approve it on their phones.
+                      </p>
+                    </div>
+                  ) : (
+                    <div className="space-y-3">
+                      <div className="grid grid-cols-2 gap-3">
+                        <button
+                          onClick={() => submitDecision("approved")}
+                          className={`py-3.5 px-4 rounded-2xl font-black text-sm flex items-center justify-center gap-2 border-2 transition active:scale-95 ${
+                            currentUserDecision === "approved"
+                              ? "bg-emerald-600 text-white border-emerald-700 shadow-md ring-2 ring-emerald-500/50"
+                              : "bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border-emerald-300"
+                          }`}
+                        >
+                          <span className="text-lg">✓</span>
+                          <span>Approve</span>
+                        </button>
+
+                        <button
+                          onClick={() => submitDecision("declined")}
+                          className={`py-3.5 px-4 rounded-2xl font-black text-sm flex items-center justify-center gap-2 border-2 transition active:scale-95 ${
+                            currentUserDecision === "declined"
+                              ? "bg-rose-600 text-white border-rose-700 shadow-md ring-2 ring-rose-500/50"
+                              : "bg-rose-50 hover:bg-rose-100 text-rose-800 border-rose-300"
+                          }`}
+                        >
+                          <span className="text-lg">✕</span>
+                          <span>Decline</span>
+                        </button>
+                      </div>
+
+                      <p className="text-[11px] text-center text-slate-400">
+                        Your vote is saved instantly. When all 3 approve, duty rotates automatically.
+                      </p>
+                    </div>
+                  )}
+                </section>
+
+                {/* Flatmates Approval Status Overview */}
+                <section className="bg-white border-2 border-slate-200 rounded-3xl p-5 sm:p-6 shadow-xs space-y-3">
+                  <h3 className="text-sm font-black text-slate-800">Flatmates Status</h3>
+
+                  <div className="space-y-2.5">
                     {requiredApprovers.map((member) => {
-                      const hasApproved = !!garbageCycle.approvals[member];
+                      const status = garbageCycle.approvals[member];
                       return (
                         <div
                           key={member}
-                          className={`flex items-center justify-between p-4 rounded-2xl border-2 transition ${
-                            hasApproved
-                              ? "bg-emerald-50 border-emerald-300"
+                          className={`flex items-center justify-between p-3 rounded-2xl border transition ${
+                            status === "approved"
+                              ? "bg-emerald-50/70 border-emerald-300"
+                              : status === "declined"
+                              ? "bg-rose-50/70 border-rose-300"
                               : "bg-slate-50 border-slate-200"
                           }`}
                         >
-                          <div className="flex items-center gap-3">
-                            <Avatar name={member} size={38} />
-                            <div>
-                              <h4 className="font-extrabold text-sm text-slate-800">{member}</h4>
-                              <span className="text-xs font-bold">
-                                {hasApproved ? (
-                                  <span className="text-emerald-700">✓ Has Approved Clean</span>
-                                ) : (
-                                  <span className="text-slate-400">⏳ Pending Approval</span>
-                                )}
-                              </span>
-                            </div>
+                          <div className="flex items-center gap-2.5">
+                            <Avatar name={member} size={32} />
+                            <span className="font-extrabold text-sm text-slate-800">{member}</span>
                           </div>
 
-                          <button
-                            onClick={() => toggleGarbageApproval(member)}
-                            className={`px-4 py-2 rounded-xl text-xs font-black transition ${
-                              hasApproved
-                                ? "bg-emerald-600 text-white shadow-sm ring-2 ring-emerald-600 ring-offset-1"
-                                : "bg-white hover:bg-slate-100 text-slate-700 border border-slate-300"
+                          <span
+                            className={`text-xs font-black px-2.5 py-1 rounded-xl ${
+                              status === "approved"
+                                ? "bg-emerald-600 text-white"
+                                : status === "declined"
+                                ? "bg-rose-600 text-white"
+                                : "bg-slate-200 text-slate-600"
                             }`}
                           >
-                            {hasApproved ? "Approved ✓" : "I Approve Clean"}
-                          </button>
-                        </div>
-                      );
-                    })}
-                  </div>
-                </section>
-
-                {/* Rotation Order Preview */}
-                <section className="bg-white border-2 border-slate-200 rounded-3xl p-6 shadow-sm space-y-3">
-                  <h3 className="text-base font-black text-slate-800">Upcoming Turn Order</h3>
-                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-                    {safeGarbageMembers.map((member, i) => {
-                      const isCurrent = i === garbageCycle.currentIndex % safeGarbageMembers.length;
-                      return (
-                        <div
-                          key={member}
-                          className={`p-3 rounded-2xl border-2 text-center space-y-1 ${
-                            isCurrent
-                              ? "bg-amber-50 border-amber-400"
-                              : "bg-slate-50 border-slate-200 opacity-60"
-                          }`}
-                        >
-                          <span className="text-[10px] font-black uppercase text-slate-400 block">
-                            {isCurrent ? "Active" : `Turn #${((i - garbageCycle.currentIndex + safeGarbageMembers.length) % safeGarbageMembers.length) + 1}`}
+                            {status === "approved"
+                              ? "Approved ✓"
+                              : status === "declined"
+                              ? "Declined ✕"
+                              : "Pending ⏳"}
                           </span>
-                          <Avatar name={member} size={32} />
-                          <h4 className="font-black text-xs text-slate-800">{member}</h4>
                         </div>
                       );
                     })}
                   </div>
                 </section>
-
-                {/* Clearance History */}
-                {garbageCycle.history && garbageCycle.history.length > 0 && (
-                  <section className="bg-white border-2 border-slate-200 rounded-3xl p-6 shadow-sm space-y-3">
-                    <h3 className="text-sm font-black text-slate-800">Recent Completed Cleans</h3>
-                    <ul className="divide-y divide-slate-100 text-xs">
-                      {garbageCycle.history.map((h, idx) => (
-                        <li key={idx} className="py-2.5 flex justify-between items-center">
-                          <span className="font-extrabold text-slate-700">Cleaned by {h.cleaner}</span>
-                          <span className="text-slate-400">{h.timestamp}</span>
-                        </li>
-                      ))}
-                    </ul>
-                  </section>
-                )}
               </div>
             )}
           </div>
 
-          {/* RIGHT: Member Order & Date Lookup */}
-          <div className="lg:col-span-5 xl:col-span-4 space-y-6">
-            {/* Quick Date Lookup for Utensils */}
+          {/* RIGHT: Calendar Lookup & Settings */}
+          <div className="lg:col-span-5 xl:col-span-4 space-y-5">
             {activeTab === "utensils" ? (
-              <section className="bg-white border-2 border-slate-200 rounded-3xl p-6 shadow-sm">
-                <h3 className="text-base font-black text-slate-800 mb-2">Check Utensils Date</h3>
-                <p className="text-xs text-slate-500 mb-4">Select any date to preview lunch & dinner assignees.</p>
+              <section className="bg-white border-2 border-slate-200 rounded-3xl p-5 shadow-xs">
+                <h3 className="text-base font-black text-slate-800 mb-1">Check Utensils Date</h3>
+                <p className="text-xs text-slate-500 mb-3">Lookup who is assigned for lunch and dinner on any day.</p>
 
                 <input
                   type="date"
                   value={customSearchDate}
                   onChange={handleDateSearch}
-                  className="w-full bg-slate-50 border-2 border-slate-200 rounded-xl px-4 py-2.5 font-bold text-sm text-slate-700 focus:outline-indigo-500"
+                  className="w-full bg-slate-50 border-2 border-slate-200 rounded-xl px-3 py-2 font-bold text-sm text-slate-700"
                 />
 
                 {searchResults && (
-                  <div className="mt-4 p-4 rounded-2xl bg-slate-50 border border-slate-200 space-y-2">
-                    <div className="text-xs font-bold text-slate-400 uppercase">
+                  <div className="mt-3 p-3.5 rounded-2xl bg-slate-50 border border-slate-200 space-y-1.5 text-sm">
+                    <div className="text-[10px] font-bold text-slate-400 uppercase">
                       {DAYS[searchResults.date.getDay()]}, {searchResults.date.getDate()} {MONTHS[searchResults.date.getMonth()]}
                     </div>
 
                     {searchResults.isSunday ? (
-                      <div className="text-emerald-600 font-extrabold text-sm">Sunday — No Utensil Duty</div>
+                      <div className="text-emerald-600 font-extrabold text-sm">Sunday — No Chores</div>
                     ) : (
-                      <div className="space-y-1 text-sm">
+                      <>
                         <div>
                           <span className="font-bold text-slate-500">Lunch: </span>
                           <span className="font-black text-slate-800">{searchResults.lunch}</span>
@@ -894,35 +923,48 @@ export default function App() {
                           <span className="font-bold text-slate-500">Dinner: </span>
                           <span className="font-black text-slate-800">{searchResults.dinner}</span>
                         </div>
-                      </div>
+                      </>
                     )}
                   </div>
                 )}
               </section>
             ) : (
-              <section className="bg-white border-2 border-slate-200 rounded-3xl p-6 shadow-sm space-y-2">
-                <h3 className="text-base font-black text-slate-800">How Garbage Rota Works</h3>
-                <ol className="text-xs text-slate-600 space-y-2 list-decimal list-inside leading-relaxed">
-                  <li><strong>One person</strong> is on call to empty the garbage as soon as it becomes full.</li>
-                  <li>After cleaning, the other <strong>3 flatmates</strong> confirm and approve the job.</li>
-                  <li>Once all 3 approve, the duty <strong>automatically hands over</strong> to the next person.</li>
-                </ol>
+              <section className="bg-white border-2 border-slate-200 rounded-3xl p-5 shadow-xs space-y-3">
+                <h3 className="text-base font-black text-slate-800">Rotation Order</h3>
+                <div className="space-y-1.5">
+                  {safeGarbageMembers.map((member, i) => {
+                    const isCurrent = i === garbageCycle.currentIndex % safeGarbageMembers.length;
+                    return (
+                      <div
+                        key={member}
+                        className={`flex items-center justify-between p-2.5 rounded-xl border ${
+                          isCurrent ? "bg-amber-50 border-amber-300 font-black" : "bg-slate-50 border-slate-200 opacity-70"
+                        }`}
+                      >
+                        <div className="flex items-center gap-2">
+                          <Avatar name={member} size={26} />
+                          <span className="text-xs font-bold text-slate-800">{member}</span>
+                        </div>
+                        <span className="text-[10px] font-black uppercase text-slate-400">
+                          {isCurrent ? "Active Cleaner" : `Turn #${((i - garbageCycle.currentIndex + safeGarbageMembers.length) % safeGarbageMembers.length) + 1}`}
+                        </span>
+                      </div>
+                    );
+                  })}
+                </div>
               </section>
             )}
 
-            {/* Member Management */}
-            <section className="bg-white border-2 border-slate-200 rounded-3xl p-6 shadow-sm space-y-4">
+            {/* Member Order Edit */}
+            <section className="bg-white border-2 border-slate-200 rounded-3xl p-5 shadow-xs space-y-3">
               <div className="flex items-center justify-between">
                 <div>
-                  <h3 className="text-base font-black text-slate-800">
-                    {activeTab === "utensils" ? "Utensils Members" : "Garbage Members"}
-                  </h3>
-                  <span className="text-xs text-slate-400">Order determines rotation</span>
+                  <h3 className="text-sm font-black text-slate-800">Members List</h3>
+                  <span className="text-[10px] text-slate-400">Controls rotation cycle</span>
                 </div>
                 <button
                   onClick={handleLockClick}
-                  className="p-2 rounded-xl hover:bg-slate-100 text-slate-500 border border-slate-200"
-                  title={unlocked ? "Lock roster edits" : "Unlock roster edits"}
+                  className="p-1.5 rounded-xl hover:bg-slate-100 text-slate-500 border border-slate-200"
                 >
                   <LockIcon open={unlocked} />
                 </button>
@@ -932,31 +974,31 @@ export default function App() {
                 <div className="space-y-2">
                   <input
                     type="password"
-                    placeholder="Enter admin password..."
+                    placeholder="Enter password..."
                     value={pwInput}
                     onChange={(e) => setPwInput(e.target.value)}
                     onKeyDown={(e) => e.key === "Enter" && handlePwSubmit()}
-                    className="w-full text-sm border-2 rounded-xl p-2 font-medium"
+                    className="w-full text-xs border rounded-xl p-2 font-medium"
                   />
-                  {pwError && <p className="text-xs text-rose-600 font-bold">Incorrect password.</p>}
+                  {pwError && <p className="text-[10px] text-rose-600 font-bold">Incorrect password.</p>}
                   <button
                     onClick={handlePwSubmit}
-                    className="w-full bg-slate-800 text-white rounded-xl py-2 font-bold text-xs hover:bg-slate-900"
+                    className="w-full bg-slate-800 text-white rounded-xl py-1.5 font-bold text-xs"
                   >
                     Unlock
                   </button>
                 </div>
               )}
 
-              <ul className="space-y-2">
+              <ul className="space-y-1.5">
                 {currentMembersList.map((member, index) => (
                   <li
                     key={member}
-                    className="flex items-center justify-between bg-slate-50 border border-slate-200/80 rounded-xl p-2.5"
+                    className="flex items-center justify-between bg-slate-50 border border-slate-200 rounded-xl p-2"
                   >
-                    <div className="flex items-center gap-3">
-                      <Avatar name={member} size={30} />
-                      <span className="font-extrabold text-sm text-slate-700">{member}</span>
+                    <div className="flex items-center gap-2">
+                      <Avatar name={member} size={26} />
+                      <span className="font-extrabold text-xs text-slate-700">{member}</span>
                     </div>
 
                     {unlocked && (
@@ -964,20 +1006,20 @@ export default function App() {
                         <button
                           onClick={() => moveUp(index)}
                           disabled={index === 0}
-                          className="p-1 rounded hover:bg-slate-200 text-slate-600 disabled:opacity-30"
+                          className="p-1 text-slate-500 disabled:opacity-30"
                         >
                           <ArrowUpIcon />
                         </button>
                         <button
                           onClick={() => moveDown(index)}
                           disabled={index === currentMembersList.length - 1}
-                          className="p-1 rounded hover:bg-slate-200 text-slate-600 disabled:opacity-30"
+                          className="p-1 text-slate-500 disabled:opacity-30"
                         >
                           <ArrowDownIcon />
                         </button>
                         <button
                           onClick={() => remove(member)}
-                          className="p-1 rounded hover:bg-rose-100 text-rose-600"
+                          className="p-1 text-rose-600"
                         >
                           <TrashIcon />
                         </button>
@@ -988,17 +1030,17 @@ export default function App() {
               </ul>
 
               {unlocked && (
-                <div className="flex gap-2 pt-2">
+                <div className="flex gap-1.5 pt-1">
                   <input
                     type="text"
                     value={input}
                     onChange={(e) => setInput(e.target.value)}
-                    placeholder="Add member name..."
-                    className="w-full text-sm border border-slate-300 rounded-xl px-3 py-2 font-medium"
+                    placeholder="New member..."
+                    className="w-full text-xs border rounded-xl px-2.5 py-1.5 font-medium"
                   />
                   <button
                     onClick={add}
-                    className="bg-indigo-600 text-white px-4 py-2 rounded-xl text-sm font-bold hover:bg-indigo-700"
+                    className="bg-indigo-600 text-white px-3 py-1.5 rounded-xl text-xs font-bold"
                   >
                     Add
                   </button>
