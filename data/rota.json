@@ -16,37 +16,6 @@
   "garbageCycle": {
     "currentIndex": 3,
     "approvals": {},
-    "history": [
-      {
-        "id": 1790767687475,
-        "cleaner": "Aman",
-        "dateStr": "Wednesday, 30 Sep 2026",
-        "timestamp": "04:58 PM",
-        "proxies": [
-          {
-            "forMember": "Pritam",
-            "approvedBy": "Subhram"
-          },
-          {
-            "forMember": "Chinmaya",
-            "approvedBy": "Subhram"
-          }
-        ],
-        "epoch": 1790767687475
-      },
-      {
-        "id": 1790767607675,
-        "cleaner": "Pritam",
-        "dateStr": "Wednesday, 30 Sep 2026",
-        "timestamp": "04:56 PM",
-        "proxies": [
-          {
-            "forMember": "Chinmaya",
-            "approvedBy": "Aman"
-          }
-        ],
-        "epoch": 1790767607675
-      }
-    ]
+    "history": []
   }
 }
