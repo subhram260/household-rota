@@ -32,6 +32,11 @@
         "status": "approved",
         "approvedBy": "Pritam",
         "isProxy": true
+      },
+      "Chinmaya": {
+        "status": "approved",
+        "approvedBy": "Pritam",
+        "isProxy": true
       }
     },
     "history": [
