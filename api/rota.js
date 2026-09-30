@@ -1,12 +1,19 @@
 import fs from "fs";
 import path from "path";
 
-// 4 flatmates & garbage turn-cycle fallback
+// 4 flatmates, PIN passcodes, and garbage cycle fallback
 const fallbackData = {
   members: {
     utensils: ["Aman", "Subhram", "Chinmaya", "Pritam"],
     garbage: ["Aman", "Subhram", "Chinmaya", "Pritam"],
   },
+  passcodes: {
+    Aman: "1001",
+    Subhram: "1002",
+    Chinmaya: "1003",
+    Pritam: "1004",
+  },
+  adminSecret: "kitchen123",
   garbageCycle: {
     currentIndex: 0,
     approvals: {},
@@ -125,7 +132,8 @@ export default async function handler(req, res) {
   try {
     if (req.method === "GET") {
       const { data, fallback } = await readGitHubJson();
-      return res.status(200).json({
+
+      const safeState = {
         ...fallbackData,
         ...data,
         members: {
@@ -136,6 +144,14 @@ export default async function handler(req, res) {
           ...fallbackData.garbageCycle,
           ...(data?.garbageCycle || {}),
         },
+      };
+
+      // Strip sensitive codes before returning to client devices
+      delete safeState.passcodes;
+      delete safeState.adminSecret;
+
+      return res.status(200).json({
+        ...safeState,
         fallback,
       });
     }
@@ -148,18 +164,23 @@ export default async function handler(req, res) {
 
       // Fetch latest state before writing to ensure partial updates merge cleanly
       const current = await readGitHubJson();
+      const currentData = current.data || {};
+
       const merged = {
         ...fallbackData,
-        ...current.data,
+        ...currentData,
         ...incoming,
         members: {
-          ...(current.data?.members || fallbackData.members),
+          ...(currentData.members || fallbackData.members),
           ...(incoming.members || {}),
         },
         garbageCycle: {
-          ...(current.data?.garbageCycle || fallbackData.garbageCycle),
+          ...(currentData.garbageCycle || fallbackData.garbageCycle),
           ...(incoming.garbageCycle || {}),
         },
+        // Preserve server-side secrets from being overwritten
+        passcodes: currentData.passcodes || fallbackData.passcodes,
+        adminSecret: currentData.adminSecret || fallbackData.adminSecret,
       };
 
       const result = await writeGitHubJson(merged);
