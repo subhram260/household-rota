@@ -12,5 +12,10 @@
       "Subhram",
       "Chinmaya"
     ]
+  },
+  "garbageCycle": {
+    "currentIndex": 0,
+    "approvals": {},
+    "history": []
   }
 }
