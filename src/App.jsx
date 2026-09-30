@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useState, useCallback } from "react";
 
 // Days and Months constants
 const DAYS = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
@@ -6,19 +6,12 @@ const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "
 
 const ADMIN_SECRET = "kitchen123";
 
-// Shared flatmates list
+// Shared flatmates default list
 const DEFAULT_MEMBERS = ["Aman", "Subhram", "Chinmaya", "Pritam"];
 
-// Member verification PIN codes (Kept private in code/server, not displayed on UI)
-const MEMBER_PASSCODES = {
-  Aman: "1001",
-  Subhram: "1002",
-  Chinmaya: "1003",
-  Pritam: "1004",
-};
-
 const ROTA_API_URL = "/api/rota";
-const DEVICE_USER_STORAGE_KEY = "household-rota:device-verified-member";
+const VERIFY_API_URL = "/api/verify-code";
+const DEVICE_AUTH_STORAGE_KEY = "household-rota:device-auth";
 
 // 12 working-day cycle matrix starting Wednesday, Sep 30, 2026
 // Member indices: 0: Aman, 1: Subhram, 2: Chinmaya, 3: Pritam
@@ -174,13 +167,13 @@ export default function App() {
   const [utensilsMembers, setUtensilsMembers] = useState(DEFAULT_MEMBERS);
   const [GarbageMembers, setGarbageMembers] = useState(DEFAULT_MEMBERS);
 
-  // Phone identity verified via one-time code (stays on device)
-  const [verifiedMember, setVerifiedMember] = useState(() => {
-    return localStorage.getItem(DEVICE_USER_STORAGE_KEY) || null;
-  });
+  // Phone identity verified via backend check
+  const [verifiedMember, setVerifiedMember] = useState(null);
+  const [isCheckingAuth, setIsCheckingAuth] = useState(true);
 
   const [verifyPinInput, setVerifyPinInput] = useState("");
   const [verifyPinError, setVerifyPinError] = useState("");
+  const [isSubmittingPin, setIsSubmittingPin] = useState(false);
 
   // Shared Garbage Cycle state (synced with data/rota.json)
   const [garbageCycle, setGarbageCycle] = useState({
@@ -190,6 +183,8 @@ export default function App() {
   });
 
   const [proxyTargetMember, setProxyTargetMember] = useState(null);
+  const [showSkipConfirmModal, setShowSkipConfirmModal] = useState(false);
+  const [historyFilter, setHistoryFilter] = useState("all"); // 'all' | 'clean' | 'skip'
 
   // History Clear Modal
   const [showClearHistoryModal, setShowClearHistoryModal] = useState(false);
@@ -221,6 +216,7 @@ export default function App() {
 
   const safeGarbageMembers = GarbageMembers.length ? GarbageMembers : DEFAULT_MEMBERS;
   const currentGarbageAssignee = safeGarbageMembers[garbageCycle.currentIndex % safeGarbageMembers.length];
+  const nextGarbageAssignee = safeGarbageMembers[(garbageCycle.currentIndex + 1) % safeGarbageMembers.length];
   const requiredApprovers = safeGarbageMembers.filter((m) => m !== currentGarbageAssignee);
 
   const getApprovalStatus = (memberName) => {
@@ -230,6 +226,46 @@ export default function App() {
   };
 
   const approvedCount = requiredApprovers.filter((m) => getApprovalStatus(m)?.status === "approved").length;
+
+  // Auto-verify stored device credentials against backend
+  const verifySavedSession = useCallback(async () => {
+    try {
+      const stored = localStorage.getItem(DEVICE_AUTH_STORAGE_KEY);
+      if (!stored) {
+        setIsCheckingAuth(false);
+        return;
+      }
+
+      const { member, token } = JSON.parse(stored);
+      if (!member || !token) {
+        setIsCheckingAuth(false);
+        return;
+      }
+
+      const response = await fetch(VERIFY_API_URL, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ member, token }),
+      });
+
+      if (response.ok) {
+        const data = await response.json();
+        if (data.valid) {
+          setVerifiedMember(data.member);
+        } else {
+          localStorage.removeItem(DEVICE_AUTH_STORAGE_KEY);
+          setVerifiedMember(null);
+        }
+      } else {
+        localStorage.removeItem(DEVICE_AUTH_STORAGE_KEY);
+        setVerifiedMember(null);
+      }
+    } catch {
+      // Preserve local state if offline
+    } finally {
+      setIsCheckingAuth(false);
+    }
+  }, []);
 
   // Sync state with data/rota.json via /api/rota
   const syncWithServer = async () => {
@@ -252,14 +288,13 @@ export default function App() {
     }
   };
 
-  // Initial load and periodic 4-second poll for cross-phone synchronization
   useEffect(() => {
+    verifySavedSession();
     syncWithServer();
     const interval = setInterval(syncWithServer, 4000);
     return () => clearInterval(interval);
-  }, []);
+  }, [verifySavedSession]);
 
-  // Save changes back to data/rota.json via /api/rota
   const patchServerData = async (payload) => {
     try {
       await fetch(ROTA_API_URL, {
@@ -272,27 +307,44 @@ export default function App() {
     }
   };
 
-  const handleVerifyPhone = (e) => {
+  // Submit PIN to backend for verification
+  const handleVerifyPhone = async (e) => {
     e.preventDefault();
     const pin = verifyPinInput.trim();
-    if (!pin) return;
+    if (!pin || isSubmittingPin) return;
 
-    const foundMember = Object.keys(MEMBER_PASSCODES).find(
-      (name) => MEMBER_PASSCODES[name] === pin
-    );
+    setIsSubmittingPin(true);
+    setVerifyPinError("");
 
-    if (foundMember) {
-      setVerifiedMember(foundMember);
-      localStorage.setItem(DEVICE_USER_STORAGE_KEY, foundMember);
-      setVerifyPinInput("");
-      setVerifyPinError("");
-    } else {
-      setVerifyPinError("Invalid PIN. Please check with your household admin.");
+    try {
+      const response = await fetch(VERIFY_API_URL, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ pin }),
+      });
+
+      const data = await response.json();
+
+      if (response.ok && data.valid) {
+        setVerifiedMember(data.member);
+        localStorage.setItem(
+          DEVICE_AUTH_STORAGE_KEY,
+          JSON.stringify({ member: data.member, token: data.token })
+        );
+        setVerifyPinInput("");
+        setVerifyPinError("");
+      } else {
+        setVerifyPinError("Incorrect PIN. Please contact your household admin.");
+      }
+    } catch {
+      setVerifyPinError("Network error. Please try again.");
+    } finally {
+      setIsSubmittingPin(false);
     }
   };
 
   const handleLogoutDevice = () => {
-    localStorage.removeItem(DEVICE_USER_STORAGE_KEY);
+    localStorage.removeItem(DEVICE_AUTH_STORAGE_KEY);
     setVerifiedMember(null);
   };
 
@@ -334,6 +386,7 @@ export default function App() {
 
       const historyEntry = {
         id: Date.now(),
+        type: "clean",
         cleaner: currentGarbageAssignee,
         dateStr: `${DAYS[now.getDay()]}, ${now.getDate()} ${MONTHS[now.getMonth()]} ${now.getFullYear()}`,
         timestamp: now.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
@@ -360,6 +413,39 @@ export default function App() {
     }
   };
 
+  // Skip turn with full audit trail of who skipped for whom
+  const handleConfirmSkip = () => {
+    if (!verifiedMember) return;
+
+    const nextIdx = (garbageCycle.currentIndex + 1) % safeGarbageMembers.length;
+    const now = new Date();
+
+    const skipHistoryEntry = {
+      id: Date.now(),
+      type: "skip",
+      skippedCleaner: currentGarbageAssignee,
+      skippedBy: verifiedMember,
+      passedTo: nextGarbageAssignee,
+      dateStr: `${DAYS[now.getDay()]}, ${now.getDate()} ${MONTHS[now.getMonth()]} ${now.getFullYear()}`,
+      timestamp: now.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
+      epoch: now.getTime(),
+    };
+
+    const thirtyDaysAgo = Date.now() - 30 * 24 * 60 * 60 * 1000;
+    const filteredHistory = [skipHistoryEntry, ...(garbageCycle.history || [])].filter(
+      (item) => !item.epoch || item.epoch >= thirtyDaysAgo
+    );
+
+    const updatedCycle = {
+      currentIndex: nextIdx,
+      approvals: {},
+      history: filteredHistory,
+    };
+
+    updateGarbageCycle(updatedCycle);
+    setShowSkipConfirmModal(false);
+  };
+
   const handleClearHistorySubmit = (e) => {
     e.preventDefault();
     if (clearHistoryPassword === ADMIN_SECRET) {
@@ -375,15 +461,6 @@ export default function App() {
       setClearHistoryError(true);
       setClearHistoryPassword("");
     }
-  };
-
-  const manualAdvanceGarbage = () => {
-    const nextIdx = (garbageCycle.currentIndex + 1) % safeGarbageMembers.length;
-    updateGarbageCycle({
-      ...garbageCycle,
-      currentIndex: nextIdx,
-      approvals: {},
-    });
   };
 
   const getUpcomingNonSundays = (count) => {
@@ -578,17 +655,23 @@ export default function App() {
   const upcomingDays = getUpcomingNonSundays(daysCount);
   const currentUserDecision = verifiedMember ? getApprovalStatus(verifiedMember) : null;
 
+  const filteredHistory = (garbageCycle.history || []).filter((item) => {
+    if (historyFilter === "clean") return item.type !== "skip";
+    if (historyFilter === "skip") return item.type === "skip";
+    return true;
+  });
+
   return (
     <div className="min-h-screen bg-slate-50 text-slate-800 flex flex-col items-center p-3 sm:p-6 md:py-10">
-      {/* ONE-TIME PHONE VERIFICATION MODAL (NO CODES DISPLAYED) */}
-      {!verifiedMember && (
+      {/* ONE-TIME PHONE VERIFICATION MODAL */}
+      {!isCheckingAuth && !verifiedMember && (
         <div className="fixed inset-0 z-50 bg-slate-900/80 backdrop-blur-sm flex items-center justify-center p-4">
           <div className="bg-white rounded-3xl p-6 sm:p-8 max-w-sm w-full shadow-2xl space-y-5 border-2 border-slate-100">
             <div className="text-center space-y-1">
               <span className="text-4xl block">📱</span>
-              <h2 className="text-2xl font-black text-slate-800">Verify Your Phone</h2>
+              <h2 className="text-2xl font-black text-slate-800">Device Verification</h2>
               <p className="text-xs text-slate-500">
-                Enter your private 4-digit household PIN. Your device will stay verified.
+                Enter your private 4-digit PIN. Your mobile will verify automatically on future visits.
               </p>
             </div>
 
@@ -616,11 +699,50 @@ export default function App() {
 
               <button
                 type="submit"
-                className="w-full py-3.5 bg-indigo-600 hover:bg-indigo-700 active:scale-98 transition text-white font-black rounded-2xl shadow-md text-sm"
+                disabled={isSubmittingPin}
+                className="w-full py-3.5 bg-indigo-600 hover:bg-indigo-700 active:scale-98 transition text-white font-black rounded-2xl shadow-md text-sm disabled:opacity-50"
               >
-                Verify Device
+                {isSubmittingPin ? "Checking PIN..." : "Verify Mobile"}
               </button>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* CONFIRM SKIP TURN MODAL WITH AUDIT TRAIL */}
+      {showSkipConfirmModal && (
+        <div className="fixed inset-0 z-50 bg-slate-900/80 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-white rounded-3xl p-6 sm:p-7 max-w-sm w-full shadow-2xl space-y-4 border-2 border-amber-300">
+            <div className="text-center space-y-2">
+              <span className="text-4xl block">⏭️</span>
+              <h3 className="text-lg font-black text-slate-800">Skip Garbage Turn</h3>
+              <p className="text-xs text-slate-600 leading-relaxed">
+                Skip <strong className="text-slate-900 font-black">{currentGarbageAssignee}</strong> and pass the turn to{" "}
+                <strong className="text-indigo-600 font-black">{nextGarbageAssignee}</strong>?
+              </p>
+              <div className="bg-amber-50 border border-amber-200 rounded-xl p-2.5 text-[11px] text-amber-800 font-semibold text-left">
+                📝 <strong>Audit Log Note:</strong> It will be permanently recorded that{" "}
+                <strong className="text-slate-900">{verifiedMember}</strong> skipped{" "}
+                <strong className="text-slate-900">{currentGarbageAssignee}</strong>'s turn.
+              </div>
+            </div>
+
+            <div className="flex gap-2 pt-1">
+              <button
+                type="button"
+                onClick={() => setShowSkipConfirmModal(false)}
+                className="w-1/2 py-2.5 rounded-xl text-xs font-bold bg-slate-100 text-slate-700 hover:bg-slate-200"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={handleConfirmSkip}
+                className="w-1/2 py-2.5 rounded-xl text-xs font-black bg-amber-600 hover:bg-amber-700 text-white shadow-sm"
+              >
+                Confirm Skip
+              </button>
+            </div>
           </div>
         </div>
       )}
@@ -631,9 +753,7 @@ export default function App() {
           <div className="bg-white rounded-3xl p-6 sm:p-7 max-w-sm w-full shadow-2xl space-y-4 border-2 border-amber-200">
             <div className="text-center space-y-2">
               <span className="text-4xl block">🤝</span>
-              <h3 className="text-lg font-black text-slate-800">
-                Confirm Proxy Approval
-              </h3>
+              <h3 className="text-lg font-black text-slate-800">Confirm Proxy Approval</h3>
               <p className="text-xs text-slate-600 leading-relaxed">
                 Are you sure you want to approve for <strong className="text-indigo-600">{proxyTargetMember}</strong> because they are absent?
               </p>
@@ -780,7 +900,7 @@ export default function App() {
                 : "text-slate-600 hover:bg-slate-300 hover:text-slate-900"
             }`}
           >
-            <span className="text-lg">🗑️️</span>
+            <span className="text-lg">🗑️</span>
             <span>Garbage</span>
           </button>
         </nav>
@@ -962,9 +1082,9 @@ export default function App() {
                     </div>
 
                     <button
-                      onClick={manualAdvanceGarbage}
-                      className="text-xs font-bold bg-white/20 hover:bg-white/30 text-white px-3 py-1.5 rounded-xl border border-white/20 transition"
-                      title="Skip turn"
+                      onClick={() => setShowSkipConfirmModal(true)}
+                      className="text-xs font-bold bg-white/20 hover:bg-white/30 text-white px-3 py-1.5 rounded-xl border border-white/20 transition active:scale-95"
+                      title="Skip this turn and log audit trail"
                     >
                       Skip ➔
                     </button>
@@ -1104,53 +1224,100 @@ export default function App() {
                   </div>
                 </section>
 
-                {/* 1-Month Garbage History Log with Proxy Attribution */}
+                {/* 1-Month Garbage History Log (Cleans & Who Skipped For Whom) */}
                 <section className="bg-white border-2 border-slate-200 rounded-3xl p-5 sm:p-6 shadow-xs space-y-3">
-                  <div className="flex items-center justify-between border-b pb-2 border-slate-100">
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between border-b pb-2 border-slate-100 gap-2">
                     <div className="flex items-center gap-2">
-                      <h3 className="text-sm font-black text-slate-800">1-Month Cleaning History</h3>
-                      <span className="text-[10px] text-slate-400 font-bold">(30 Days)</span>
+                      <h3 className="text-sm font-black text-slate-800">1-Month History Log</h3>
+                      <span className="text-[10px] text-slate-400 font-bold">(Past 30 Days)</span>
                     </div>
 
-                    {garbageCycle.history && garbageCycle.history.length > 0 && (
-                      <button
-                        onClick={() => setShowClearHistoryModal(true)}
-                        className="inline-flex items-center gap-1 text-[11px] font-bold text-rose-600 hover:text-rose-700 bg-rose-50 hover:bg-rose-100 px-2.5 py-1 rounded-lg border border-rose-200 transition"
-                      >
-                        <span>🔒</span> Clear Log
-                      </button>
-                    )}
+                    <div className="flex items-center gap-2 self-end sm:self-center">
+                      <div className="flex bg-slate-100 p-0.5 rounded-lg border border-slate-200 text-[10px] font-bold">
+                        <button
+                          onClick={() => setHistoryFilter("all")}
+                          className={`px-2 py-0.5 rounded ${historyFilter === "all" ? "bg-white shadow-xs text-slate-800 font-black" : "text-slate-500"}`}
+                        >
+                          All
+                        </button>
+                        <button
+                          onClick={() => setHistoryFilter("clean")}
+                          className={`px-2 py-0.5 rounded ${historyFilter === "clean" ? "bg-white shadow-xs text-slate-800 font-black" : "text-slate-500"}`}
+                        >
+                          Cleans
+                        </button>
+                        <button
+                          onClick={() => setHistoryFilter("skip")}
+                          className={`px-2 py-0.5 rounded ${historyFilter === "skip" ? "bg-white shadow-xs text-slate-800 font-black" : "text-slate-500"}`}
+                        >
+                          Skips
+                        </button>
+                      </div>
+
+                      {garbageCycle.history && garbageCycle.history.length > 0 && (
+                        <button
+                          onClick={() => setShowClearHistoryModal(true)}
+                          className="inline-flex items-center gap-1 text-[11px] font-bold text-rose-600 hover:text-rose-700 bg-rose-50 hover:bg-rose-100 px-2 py-1 rounded-lg border border-rose-200 transition"
+                        >
+                          <span>🔒</span> Clear
+                        </button>
+                      )}
+                    </div>
                   </div>
 
-                  {garbageCycle.history && garbageCycle.history.length > 0 ? (
+                  {filteredHistory && filteredHistory.length > 0 ? (
                     <div className="divide-y divide-slate-100 text-xs max-h-64 overflow-y-auto pr-1">
-                      {garbageCycle.history.map((item) => (
-                        <div key={item.id} className="py-2.5 flex items-center justify-between">
-                          <div className="flex items-center gap-2.5">
-                            <Avatar name={item.cleaner} size={28} />
-                            <div>
-                              <span className="font-black text-slate-800 block">Cleaned by {item.cleaner}</span>
-                              <span className="text-[10px] text-slate-400">{item.dateStr}</span>
-                              {item.proxies && item.proxies.length > 0 && (
-                                <div className="text-[10px] text-indigo-600 font-semibold mt-0.5">
-                                  {item.proxies.map((p, idx) => (
-                                    <span key={idx} className="block">
-                                      Proxy for {p.forMember}: approved by {p.approvedBy}
-                                    </span>
-                                  ))}
-                                </div>
-                              )}
+                      {filteredHistory.map((item) => (
+                        <div key={item.id} className="py-2.5 flex items-center justify-between gap-2">
+                          {item.type === "skip" ? (
+                            /* Skip Event Log Entry */
+                            <div className="flex items-center gap-2.5">
+                              <span className="text-xl">⏭️</span>
+                              <div>
+                                <span className="font-black text-slate-800 block">
+                                  {item.skippedCleaner} was skipped
+                                </span>
+                                <span className="text-[10px] text-amber-700 font-semibold block">
+                                  Skipped by {item.skippedBy} ➔ Passed to {item.passedTo}
+                                </span>
+                                <span className="text-[10px] text-slate-400">{item.dateStr}</span>
+                              </div>
                             </div>
-                          </div>
-                          <span className="text-[11px] font-bold text-emerald-600 bg-emerald-50 px-2 py-0.5 rounded-lg border border-emerald-200">
-                            Approved ({item.timestamp})
+                          ) : (
+                            /* Clean Event Log Entry */
+                            <div className="flex items-center gap-2.5">
+                              <Avatar name={item.cleaner} size={28} />
+                              <div>
+                                <span className="font-black text-slate-800 block">Cleaned by {item.cleaner}</span>
+                                <span className="text-[10px] text-slate-400">{item.dateStr}</span>
+                                {item.proxies && item.proxies.length > 0 && (
+                                  <div className="text-[10px] text-indigo-600 font-semibold mt-0.5">
+                                    {item.proxies.map((p, idx) => (
+                                      <span key={idx} className="block">
+                                        Proxy for {p.forMember}: approved by {p.approvedBy}
+                                      </span>
+                                    ))}
+                                  </div>
+                                )}
+                              </div>
+                            </div>
+                          )}
+
+                          <span
+                            className={`text-[10px] font-black px-2 py-0.5 rounded-lg border shrink-0 ${
+                              item.type === "skip"
+                                ? "text-amber-800 bg-amber-50 border-amber-200"
+                                : "text-emerald-700 bg-emerald-50 border-emerald-200"
+                            }`}
+                          >
+                            {item.type === "skip" ? `Skipped (${item.timestamp})` : `Approved (${item.timestamp})`}
                           </span>
                         </div>
                       ))}
                     </div>
                   ) : (
                     <p className="text-xs text-slate-400 py-3 text-center">
-                      No cleans recorded in the last 30 days.
+                      No records found in the log for this filter.
                     </p>
                   )}
                 </section>
