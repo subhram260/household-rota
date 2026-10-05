@@ -22,7 +22,13 @@
   "adminSecret": "kitchen123",
   "garbageCycle": {
     "currentIndex": 2,
-    "approvals": {},
+    "approvals": {
+      "Pritam": {
+        "status": "approved",
+        "approvedBy": "Pritam",
+        "isProxy": false
+      }
+    },
     "history": [
       {
         "id": 1791188646866,
