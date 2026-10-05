@@ -27,6 +27,11 @@
         "status": "approved",
         "approvedBy": "Subhram",
         "isProxy": false
+      },
+      "Chinmaya": {
+        "status": "approved",
+        "approvedBy": "Chinmaya",
+        "isProxy": false
       }
     },
     "history": [
