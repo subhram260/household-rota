@@ -24,7 +24,7 @@
     "currentIndex": 2,
     "approvals": {
       "Pritam": {
-        "status": "declined",
+        "status": "approved",
         "approvedBy": "Pritam",
         "isProxy": false
       }
