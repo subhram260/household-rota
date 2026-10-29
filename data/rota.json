@@ -21,9 +21,19 @@
   },
   "adminSecret": "kitchen123",
   "garbageCycle": {
-    "currentIndex": 3,
+    "currentIndex": 0,
     "approvals": {},
     "history": [
+      {
+        "id": 1793309832503,
+        "type": "skip",
+        "skippedCleaner": "Chinmaya",
+        "skippedBy": "Aman",
+        "passedTo": "Pritam",
+        "dateStr": "Friday, 30 Oct 2026",
+        "timestamp": "03:07",
+        "epoch": 1793309832502
+      },
       {
         "id": 1793309814655,
         "type": "clean",
